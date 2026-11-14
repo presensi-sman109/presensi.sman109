@@ -1,0 +1,220 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global Safety Net: Default-Deny Catch-All
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helper Primitives ---
+    function isValidId(id) {
+      return id is string && id.size() >= 1 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null && request.auth.token.email_verified == true;
+    }
+
+    function isBootstrappedSuperAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'presensi.sman109@gmail.com' ||
+        request.auth.token.email == 'sudiyantoro62@gmail.com'
+      );
+    }
+
+    function hasAdminDoc() {
+      return isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid));
+    }
+
+    function adminRole() {
+      return get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.role;
+    }
+
+    function isAdminActive() {
+      return get(/databases/$(database)/documents/admins/$(request.auth.uid)).data.active == true;
+    }
+
+    function emailRoleKey() {
+      return request.auth.token.email.lower().replace('[^a-z0-9]', '_');
+    }
+
+    function hasEmailRoleDoc() {
+      return isSignedIn()
+        && request.auth.token.email is string
+        && exists(/databases/$(database)/documents/admin_email_roles/$(emailRoleKey()));
+    }
+
+    function emailRoleDoc() {
+      return get(/databases/$(database)/documents/admin_email_roles/$(emailRoleKey())).data;
+    }
+
+    function isSuperAdmin() {
+      return isBootstrappedSuperAdmin()
+        || (hasAdminDoc() && isAdminActive() && adminRole() == 'super_admin')
+        || (hasEmailRoleDoc() && emailRoleDoc().active == true && emailRoleDoc().role == 'super_admin');
+    }
+
+    function isAdminOrSuper() {
+      return isBootstrappedSuperAdmin()
+        || (hasAdminDoc() && isAdminActive() && adminRole() in ['super_admin', 'admin'])
+        || (hasEmailRoleDoc() && emailRoleDoc().active == true && emailRoleDoc().role in ['super_admin', 'admin']);
+    }
+
+    function isAnyStaff() {
+      return isBootstrappedSuperAdmin()
+        || (hasAdminDoc() && isAdminActive() && adminRole() in ['super_admin', 'admin', 'operator'])
+        || (hasEmailRoleDoc() && emailRoleDoc().active == true && emailRoleDoc().role in ['super_admin', 'admin', 'operator']);
+    }
+
+    // --- Validation Blueprints ---
+    function isValidStudent(data) {
+      return data.keys().hasAll(['id', 'nis', 'nama', 'kelas', 'tahun', 'jenisKelamin', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'nis', 'nama', 'kelas', 'tahun', 'jenisKelamin', 'telepon', 'foto', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.nis)
+        && data.nis.size() >= 3 && data.nis.size() <= 32
+        && data.nama is string && data.nama.size() >= 1 && data.nama.size() <= 120
+        && data.kelas is string && data.kelas.size() >= 1 && data.kelas.size() <= 24
+        && data.tahun is string && data.tahun.size() >= 4 && data.tahun.size() <= 20
+        && data.jenisKelamin in ['L', 'P']
+        && (!('telepon' in data) || (data.telepon is string && data.telepon.size() <= 30))
+        && (!('foto' in data) || data.foto == null || (data.foto is string && data.foto.size() <= 150000))
+        && data.updatedAt is string && data.updatedAt.size() >= 10 && data.updatedAt.size() <= 40;
+    }
+
+    function isValidAttendance(data) {
+      return data.keys().hasAll(['id', 'nis', 'nama', 'kelas', 'date', 'time', 'status', 'recordedBy', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'nis', 'nama', 'kelas', 'date', 'time', 'status', 'notes', 'recordedBy', 'updatedAt'])
+        && isValidId(data.id)
+        && isValidId(data.nis)
+        && data.nama is string && data.nama.size() >= 1 && data.nama.size() <= 120
+        && data.kelas is string && data.kelas.size() >= 1 && data.kelas.size() <= 24
+        && data.date is string && data.date.size() == 10 && data.date.matches('^\\d{4}-\\d{2}-\\d{2}$')
+        && data.time is string && data.time.size() >= 5 && data.time.size() <= 12
+        && data.status in ['Hadir', 'Sakit', 'Ijin', 'Alpa']
+        && (!('notes' in data) || (data.notes is string && data.notes.size() <= 250))
+        && data.recordedBy is string && data.recordedBy.size() >= 1 && data.recordedBy.size() <= 100
+        && data.updatedAt is string && data.updatedAt.size() >= 10 && data.updatedAt.size() <= 40;
+    }
+
+    function isValidAdmin(data) {
+      return data.keys().hasAll(['id', 'nama', 'email', 'username', 'password', 'role', 'active', 'createdAt', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'nama', 'email', 'username', 'password', 'telepon', 'role', 'active', 'createdAt', 'updatedAt'])
+        && isValidId(data.id)
+        && data.nama is string && data.nama.size() >= 1 && data.nama.size() <= 100
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 120
+        && data.username is string && data.username.size() >= 2 && data.username.size() <= 50
+        && data.password is string && data.password.size() >= 4 && data.password.size() <= 128
+        && (!('telepon' in data) || (data.telepon is string && data.telepon.size() <= 30))
+        && data.role in ['super_admin', 'admin', 'operator']
+        && data.active is bool
+        && data.createdAt is string && data.createdAt.size() >= 10 && data.createdAt.size() <= 40
+        && data.updatedAt is string && data.updatedAt.size() >= 10 && data.updatedAt.size() <= 40;
+    }
+
+    function isValidAdminEmailRole(data) {
+      return data.keys().hasAll(['id', 'email', 'adminId', 'role', 'active', 'updatedAt'])
+        && data.keys().hasOnly(['id', 'email', 'adminId', 'role', 'active', 'updatedAt'])
+        && isValidId(data.id)
+        && data.email is string && data.email.size() >= 3 && data.email.size() <= 120
+        && isValidId(data.adminId)
+        && data.role in ['super_admin', 'admin', 'operator']
+        && data.active is bool
+        && data.updatedAt is string && data.updatedAt.size() >= 10 && data.updatedAt.size() <= 40;
+    }
+
+    function isValidAdminLog(data) {
+      return data.keys().hasAll(['id', 'adminId', 'adminName', 'adminRole', 'action', 'detail', 'timestamp'])
+        && data.keys().hasOnly(['id', 'adminId', 'adminName', 'adminRole', 'action', 'detail', 'timestamp'])
+        && isValidId(data.id)
+        && data.adminId is string && data.adminId.size() >= 1 && data.adminId.size() <= 64
+        && data.adminName is string && data.adminName.size() >= 1 && data.adminName.size() <= 100
+        && data.adminRole in ['super_admin', 'admin', 'operator']
+        && data.action is string && data.action.size() >= 1 && data.action.size() <= 80
+        && data.detail is string && data.detail.size() >= 1 && data.detail.size() <= 500
+        && data.timestamp is string && data.timestamp.size() >= 10 && data.timestamp.size() <= 40;
+    }
+
+    function isValidSchoolSettings(data) {
+      return data.keys().hasAll(['schoolName', 'academicYear', 'principalName', 'ttsVoice', 'ttsEnabled', 'updatedAt'])
+        && data.keys().hasOnly(['schoolName', 'address', 'npsn', 'academicYear', 'principalName', 'principalNip', 'homeroomTeachers', 'customLogo', 'cardBackTitle', 'cardBackRules', 'cardBackFooter', 'ttsVoice', 'ttsEnabled', 'updatedAt'])
+        && data.schoolName is string && data.schoolName.size() >= 1 && data.schoolName.size() <= 120
+        && (!('address' in data) || (data.address is string && data.address.size() <= 250))
+        && (!('npsn' in data) || (data.npsn is string && data.npsn.size() <= 20))
+        && data.academicYear is string && data.academicYear.size() >= 4 && data.academicYear.size() <= 20
+        && data.principalName is string && data.principalName.size() >= 1 && data.principalName.size() <= 100
+        && (!('principalNip' in data) || (data.principalNip is string && data.principalNip.size() <= 40))
+        && (!('homeroomTeachers' in data) || data.homeroomTeachers is map)
+        && (!('customLogo' in data) || data.customLogo == null || (data.customLogo is string && data.customLogo.size() <= 200000))
+        && (!('cardBackTitle' in data) || (data.cardBackTitle is string && data.cardBackTitle.size() <= 100))
+        && (!('cardBackRules' in data) || (data.cardBackRules is list && data.cardBackRules.size() <= 12 && (data.cardBackRules.size() == 0 || data.cardBackRules[0] is string)))
+        && (!('cardBackFooter' in data) || (data.cardBackFooter is string && data.cardBackFooter.size() <= 200))
+        && data.ttsVoice in ['Kore', 'Puck', 'Zephyr', 'Fenrir', 'Charon']
+        && data.ttsEnabled is bool
+        && data.updatedAt is string && data.updatedAt.size() >= 10 && data.updatedAt.size() <= 40;
+    }
+
+    // --- Collection Rules ---
+    match /students/{studentId} {
+      allow get: if isValidId(studentId) && isAnyStaff();
+      allow list: if isAnyStaff();
+      allow create: if isValidId(studentId) && isAdminOrSuper() && isValidStudent(incoming()) && incoming().id == studentId && incoming().nis == studentId;
+      allow update: if isValidId(studentId) && isAdminOrSuper() && isValidStudent(incoming()) && incoming().id == existing().id && incoming().nis == existing().nis
+        && incoming().diff(existing()).affectedKeys().hasOnly(['nama', 'kelas', 'tahun', 'jenisKelamin', 'telepon', 'foto', 'updatedAt']);
+      allow delete: if isValidId(studentId) && isAdminOrSuper();
+    }
+
+    match /attendances/{attendanceId} {
+      allow get: if isValidId(attendanceId) && isAnyStaff();
+      allow list: if isAnyStaff();
+      allow create: if isValidId(attendanceId) && isAnyStaff() && isValidAttendance(incoming()) && incoming().id == attendanceId;
+      allow update: if isValidId(attendanceId) && isAnyStaff() && isValidAttendance(incoming()) && incoming().id == existing().id && incoming().nis == existing().nis && incoming().date == existing().date
+        && incoming().diff(existing()).affectedKeys().hasOnly(['nama', 'kelas', 'time', 'status', 'notes', 'recordedBy', 'updatedAt']);
+      allow delete: if isValidId(attendanceId) && isAdminOrSuper();
+    }
+
+    match /admins/{adminId} {
+      allow get: if isValidId(adminId) && (isSuperAdmin() || (isSignedIn() && request.auth.uid == adminId));
+      allow list: if isSuperAdmin();
+      allow create: if isValidId(adminId) && isSuperAdmin() && isValidAdmin(incoming()) && incoming().id == adminId;
+      allow update: if isValidId(adminId) && isSuperAdmin() && isValidAdmin(incoming()) && incoming().id == existing().id && incoming().createdAt == existing().createdAt
+        && incoming().diff(existing()).affectedKeys().hasOnly(['nama', 'email', 'username', 'password', 'telepon', 'role', 'active', 'updatedAt']);
+      allow delete: if isValidId(adminId) && isSuperAdmin();
+    }
+
+    match /admin_email_roles/{emailKey} {
+      allow get: if isValidId(emailKey) && (isSuperAdmin() || (isSignedIn() && request.auth.token.email is string && emailKey == emailRoleKey()));
+      allow list: if isSuperAdmin();
+      allow create: if isValidId(emailKey) && isSuperAdmin() && isValidAdminEmailRole(incoming()) && incoming().id == emailKey;
+      allow update: if isValidId(emailKey) && isSuperAdmin() && isValidAdminEmailRole(incoming()) && incoming().id == existing().id && incoming().email == existing().email
+        && incoming().diff(existing()).affectedKeys().hasOnly(['adminId', 'role', 'active', 'updatedAt']);
+      allow delete: if isValidId(emailKey) && isSuperAdmin();
+    }
+
+    match /admin_logs/{logId} {
+      allow get: if isValidId(logId) && isAnyStaff();
+      allow list: if isAnyStaff();
+      allow create: if isValidId(logId) && isAnyStaff() && isValidAdminLog(incoming()) && incoming().id == logId;
+      allow update: if false;
+      allow delete: if isSuperAdmin() && isValidId(logId);
+    }
+
+    match /school_settings/{settingId} {
+      allow get: if isValidId(settingId) && isAnyStaff();
+      allow list: if isAnyStaff();
+      allow create: if isValidId(settingId) && isAdminOrSuper() && isValidSchoolSettings(incoming());
+      allow update: if isValidId(settingId) && isAdminOrSuper() && isValidSchoolSettings(incoming())
+        && incoming().diff(existing()).affectedKeys().hasOnly(['schoolName', 'address', 'npsn', 'academicYear', 'principalName', 'principalNip', 'homeroomTeachers', 'customLogo', 'cardBackTitle', 'cardBackRules', 'cardBackFooter', 'ttsVoice', 'ttsEnabled', 'updatedAt']);
+      allow delete: if isSuperAdmin() && isValidId(settingId);
+    }
+  }
+}

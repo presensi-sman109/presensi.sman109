@@ -1,0 +1,134 @@
+{
+  "entities": {
+    "Student": {
+      "title": "Student",
+      "description": "Data induk pelajar SMA Negeri 109 Jakarta termasuk pas foto terkompresi.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "nis": { "type": "string", "minLength": 3, "maxLength": 32, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "nama": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "kelas": { "type": "string", "minLength": 1, "maxLength": 24 },
+        "tahun": { "type": "string", "minLength": 4, "maxLength": 20 },
+        "jenisKelamin": { "type": "string", "enum": ["L", "P"] },
+        "telepon": { "type": "string", "maxLength": 30 },
+        "foto": { "type": "string", "maxLength": 150000 },
+        "updatedAt": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["id", "nis", "nama", "kelas", "tahun", "jenisKelamin", "updatedAt"]
+    },
+    "Attendance": {
+      "title": "Attendance",
+      "description": "Catatan presensi harian murid dengan tanggal, waktu WIB, dan status kehadiran.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 5, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "nis": { "type": "string", "minLength": 3, "maxLength": 32, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "nama": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "kelas": { "type": "string", "minLength": 1, "maxLength": 24 },
+        "date": { "type": "string", "minLength": 10, "maxLength": 10, "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "time": { "type": "string", "minLength": 5, "maxLength": 12 },
+        "status": { "type": "string", "enum": ["Hadir", "Sakit", "Ijin", "Alpa"] },
+        "notes": { "type": "string", "maxLength": 250 },
+        "recordedBy": { "type": "string", "maxLength": 100 },
+        "updatedAt": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["id", "nis", "nama", "kelas", "date", "time", "status", "recordedBy", "updatedAt"]
+    },
+    "AdminAccount": {
+      "title": "AdminAccount",
+      "description": "Akun administrator dan operator piket dengan peran kontrol akses berbasis peran (RBAC).",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "nama": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "email": { "type": "string", "minLength": 3, "maxLength": 120 },
+        "username": { "type": "string", "minLength": 2, "maxLength": 50 },
+        "password": { "type": "string", "minLength": 4, "maxLength": 128 },
+        "telepon": { "type": "string", "maxLength": 30 },
+        "role": { "type": "string", "enum": ["super_admin", "admin", "operator"] },
+        "active": { "type": "boolean" },
+        "createdAt": { "type": "string", "maxLength": 40 },
+        "updatedAt": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["id", "nama", "email", "username", "password", "role", "active", "createdAt", "updatedAt"]
+    },
+    "AdminActivityLog": {
+      "title": "AdminActivityLog",
+      "description": "Jejak audit aktivitas administrator dan operator piket untuk pelaporan komprehensif.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 3, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "adminId": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "adminName": { "type": "string", "minLength": 1, "maxLength": 100 },
+        "adminRole": { "type": "string", "enum": ["super_admin", "admin", "operator"] },
+        "action": { "type": "string", "minLength": 1, "maxLength": 80 },
+        "detail": { "type": "string", "minLength": 1, "maxLength": 500 },
+        "timestamp": { "type": "string", "minLength": 10, "maxLength": 40 }
+      },
+      "required": ["id", "adminId", "adminName", "adminRole", "action", "detail", "timestamp"]
+    },
+    "SchoolSettings": {
+      "title": "SchoolSettings",
+      "description": "Konfigurasi identitas sekolah, logo kustom permanen, tata tertib belakang kartu, dan pengaturan suara.",
+      "type": "object",
+      "properties": {
+        "schoolName": { "type": "string", "minLength": 1, "maxLength": 120 },
+        "address": { "type": "string", "maxLength": 250 },
+        "npsn": { "type": "string", "maxLength": 20 },
+        "academicYear": { "type": "string", "maxLength": 20 },
+        "principalName": { "type": "string", "maxLength": 100 },
+        "principalNip": { "type": "string", "maxLength": 40 },
+        "homeroomTeachers": { "type": "object" },
+        "customLogo": { "type": "string", "maxLength": 200000 },
+        "cardBackTitle": { "type": "string", "maxLength": 100 },
+        "cardBackRules": { "type": "array" },
+        "cardBackFooter": { "type": "string", "maxLength": 200 },
+        "ttsVoice": { "type": "string", "enum": ["Kore", "Puck", "Zephyr", "Fenrir", "Charon"] },
+        "ttsEnabled": { "type": "boolean" },
+        "updatedAt": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["schoolName", "academicYear", "principalName", "ttsVoice", "ttsEnabled", "updatedAt"]
+    },
+    "AdminEmailRole": {
+      "title": "AdminEmailRole",
+      "description": "Pemetaan email terverifikasi Google Auth ke peran RBAC dan status aktif admin/operator.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 2, "maxLength": 128, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "email": { "type": "string", "minLength": 3, "maxLength": 120 },
+        "adminId": { "type": "string", "minLength": 2, "maxLength": 64, "pattern": "^[a-zA-Z0-9_\\-]+$" },
+        "role": { "type": "string", "enum": ["super_admin", "admin", "operator"] },
+        "active": { "type": "boolean" },
+        "updatedAt": { "type": "string", "maxLength": 40 }
+      },
+      "required": ["id", "email", "adminId", "role", "active", "updatedAt"]
+    }
+  },
+  "firestore": {
+    "/students/{studentId}": {
+      "schema": { "$ref": "#/entities/Student" },
+      "description": "Koleksi data murid SMA Negeri 109 Jakarta beserta pas foto 2:3 terkompresi."
+    },
+    "/attendances/{attendanceId}": {
+      "schema": { "$ref": "#/entities/Attendance" },
+      "description": "Koleksi rekam jejak presensi harian murid."
+    },
+    "/admins/{adminId}": {
+      "schema": { "$ref": "#/entities/AdminAccount" },
+      "description": "Koleksi akun administrator, admin TU, dan operator piket."
+    },
+    "/admin_email_roles/{emailKey}": {
+      "schema": { "$ref": "#/entities/AdminEmailRole" },
+      "description": "Indeks peran admin berbasis email Google untuk sinkronisasi RBAC multi-perangkat."
+    },
+    "/admin_logs/{logId}": {
+      "schema": { "$ref": "#/entities/AdminActivityLog" },
+      "description": "Koleksi log aktivitas admin untuk audit dan pelaporan."
+    },
+    "/school_settings/{settingId}": {
+      "schema": { "$ref": "#/entities/SchoolSettings" },
+      "description": "Dokumen pengaturan sekolah, logo kustom, dan kustomisasi belakang kartu pelajar."
+    }
+  }
+}

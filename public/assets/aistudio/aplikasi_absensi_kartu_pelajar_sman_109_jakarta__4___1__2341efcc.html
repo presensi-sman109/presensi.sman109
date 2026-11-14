@@ -1,0 +1,1786 @@
+<!DOCTYPE html>
+<html lang="id">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistem Absensi & Kartu Pelajar - SMP NEGERI 179 JAKARTA</title>
+    
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- FontAwesome Icons -->
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    
+    <!-- HTML5 QR Code Scanner -->
+    <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
+    
+    <!-- JsBarcode & QRCode.js -->
+    <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.5/dist/JsBarcode.all.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+    
+    <!-- SheetJS (Excel Import/Export) -->
+    <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+        
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f3f4f6;
+        }
+
+        /* Responsive Print Dimensions for Student ID Card (5.4 cm x 8.56 cm) */
+        @media print {
+            body * {
+                visibility: hidden;
+            }
+            #printArea, #printArea * {
+                visibility: visible;
+            }
+            #printArea {
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100%;
+                background: white;
+                padding: 10px;
+            }
+            .no-print {
+                display: none !important;
+            }
+            .page-break {
+                page-break-after: always;
+            }
+        }
+
+        /* Student Card Exact Size (5.4cm x 8.56cm Portrait) */
+        .id-card {
+            width: 5.4cm;
+            height: 8.56cm;
+            border: 1px solid #0284c7;
+            box-sizing: border-box;
+            position: relative;
+            background: #ffffff;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            font-size: 8px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+            border-radius: 6px;
+        }
+
+        .photo-2x3 {
+            width: 2cm;
+            height: 3cm;
+            object-fit: cover;
+            border: 1px solid #cbd5e1;
+            border-radius: 3px;
+        }
+
+        .camera-overlay {
+            border: 2px dashed #3b82f6;
+            border-radius: 12px;
+        }
+
+        .text-xxs {
+            font-size: 0.65rem;
+            line-height: 0.85rem;
+        }
+    </style>
+</head>
+<body class="text-slate-800 antialiased min-h-screen flex flex-col">
+
+    <!-- Header App -->
+    <header class="bg-gradient-to-r from-blue-900 via-blue-800 to-sky-700 text-white shadow-lg sticky top-0 z-40 no-print">
+        <div class="max-w-7xl mx-auto px-4 py-3 flex flex-wrap justify-between items-center gap-2">
+            <div class="flex items-center gap-3">
+                <div id="headerLogoContainer" class="w-10 h-10 bg-white p-1 rounded-full shadow flex items-center justify-center overflow-hidden shrink-0">
+                    <img id="headerLogo" src="https://iili.io/CZUdvRa.jpg" alt="Logo SMPN 179" class="max-h-full max-w-full object-contain" onerror="this.src=window.DEFAULT_LOGO_179">
+                </div>
+                <div>
+                    <h1 class="font-extrabold text-base md:text-xl tracking-tight leading-none">ABSENSI & KARTU PELAJAR</h1>
+                    <p class="text-xs text-blue-200 font-medium">SMP NEGERI 179 JAKARTA</p>
+                </div>
+            </div>
+
+            <div class="flex items-center gap-3 text-xs bg-blue-950/40 px-3 py-1.5 rounded-lg border border-blue-400/30">
+                <span id="cloudStatus" class="flex items-center gap-1.5 text-emerald-400 font-medium">
+                    <span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> Firestore Ready
+                </span>
+                <span class="text-blue-300">|</span>
+                <span id="todayDate" class="text-slate-200 font-semibold">--/--/----</span>
+            </div>
+        </div>
+    </header>
+
+    <!-- Main Container & Navigation Tabs -->
+    <div class="max-w-7xl mx-auto w-full px-2 sm:px-4 py-4 flex-grow no-print">
+        <nav class="flex overflow-x-auto gap-2 pb-2 mb-4 scrollbar-thin border-b border-slate-200">
+            <button onclick="switchTab('scanTab')" id="tab-scanTab" class="tab-btn px-4 py-2.5 rounded-xl font-semibold text-sm flex items-center gap-2 whitespace-nowrap bg-blue-600 text-white shadow-md">
+                <i class="fa-solid fa-qrcode text-lg"></i> Scan Absensi
+            </button>
+            <button onclick="switchTab('studentsTab')" id="tab-studentsTab" class="tab-btn px-4 py-2.5 rounded-xl font-semibold text-sm flex items-center gap-2 whitespace-nowrap bg-white text-slate-600 hover:bg-slate-100 shadow-sm border">
+                <i class="fa-solid fa-users text-lg text-blue-600"></i> Data Murid
+            </button>
+            <button onclick="switchTab('absentTab')" id="tab-absentTab" class="tab-btn px-4 py-2.5 rounded-xl font-semibold text-sm flex items-center gap-2 whitespace-nowrap bg-white text-slate-600 hover:bg-slate-100 shadow-sm border">
+                <i class="fa-solid fa-user-xmark text-lg text-rose-500"></i> Belum Absen
+            </button>
+            <button onclick="switchTab('cardTab')" id="tab-cardTab" class="tab-btn px-4 py-2.5 rounded-xl font-semibold text-sm flex items-center gap-2 whitespace-nowrap bg-white text-slate-600 hover:bg-slate-100 shadow-sm border">
+                <i class="fa-solid fa-id-card text-lg text-amber-500"></i> Cetak Kartu
+            </button>
+            <button onclick="switchTab('reportTab')" id="tab-reportTab" class="tab-btn px-4 py-2.5 rounded-xl font-semibold text-sm flex items-center gap-2 whitespace-nowrap bg-white text-slate-600 hover:bg-slate-100 shadow-sm border">
+                <i class="fa-solid fa-file-excel text-lg text-emerald-600"></i> Rekap & Export
+            </button>
+            <button onclick="switchTab('settingsTab')" id="tab-settingsTab" class="tab-btn px-4 py-2.5 rounded-xl font-semibold text-sm flex items-center gap-2 whitespace-nowrap bg-white text-slate-600 hover:bg-slate-100 shadow-sm border">
+                <i class="fa-solid fa-database text-lg text-indigo-600"></i> Backup & Database
+            </button>
+        </nav>
+
+        <!-- TAB 1: SCANNER ABSENSI -->
+        <section id="scanTab" class="tab-content space-y-4">
+            <div class="grid grid-cols-1 lg:grid-cols-12 gap-6">
+                <!-- Camera / Scanner Column -->
+                <div class="lg:col-span-7 bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col items-center">
+                    <div class="w-full flex justify-between items-center mb-4">
+                        <h2 class="font-bold text-lg text-slate-800 flex items-center gap-2">
+                            <i class="fa-solid fa-camera text-blue-600"></i> Pemindai Barcode / QR Code
+                        </h2>
+                        <button id="switchCamBtn" onclick="toggleCameraFacing()" class="px-3 py-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-semibold flex items-center gap-1.5 transition">
+                            <i class="fa-solid fa-camera-rotate"></i> Ganti Kamera (<span id="camFacingText">Belakang</span>)
+                        </button>
+                    </div>
+
+                    <!-- Reader Viewport -->
+                    <div class="w-full max-w-md bg-slate-900 rounded-2xl overflow-hidden relative shadow-inner flex flex-col items-center justify-center min-h-[280px]">
+                        <div id="qr-reader" class="w-full"></div>
+                        <div id="scannerOverlay" class="absolute inset-0 pointer-events-none flex flex-col items-center justify-center">
+                            <div class="w-64 h-64 border-2 border-dashed border-blue-400/80 rounded-2xl animate-pulse flex items-center justify-center">
+                                <span class="text-white/70 text-xs bg-slate-900/60 px-2 py-1 rounded">Arahkan QR/Barcode ke Sini</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Manual Input Fallback -->
+                    <div class="w-full max-w-md mt-4 pt-4 border-t border-slate-100">
+                        <label class="block text-xs font-semibold text-slate-500 mb-1">Input Manual NISN / ID Student:</label>
+                        <form onsubmit="handleManualSubmit(event)" class="flex gap-2">
+                            <input type="text" id="manualNisnInput" placeholder="Ketik NISN / ID Kartu..." class="flex-grow px-3 py-2 text-sm border rounded-xl focus:ring-2 focus:ring-blue-500 outline-none">
+                            <button type="submit" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-sm rounded-xl transition shrink-0">
+                                Absen
+                            </button>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Live Attendance Log Column -->
+                <div class="lg:col-span-5 bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-slate-200 flex flex-col">
+                    <div class="flex justify-between items-center mb-4">
+                        <h2 class="font-bold text-lg text-slate-800 flex items-center gap-2">
+                            <i class="fa-solid fa-clock-rotate-left text-emerald-600"></i> Presensi Hari Ini
+                        </h2>
+                        <span id="todayCountBadge" class="px-2.5 py-1 bg-emerald-100 text-emerald-800 font-extrabold text-xs rounded-full">
+                            0 Hadir
+                        </span>
+                    </div>
+
+                    <!-- Toast Result Display -->
+                    <div id="scanResultToast" class="hidden mb-4 p-3 rounded-xl border flex items-center gap-3 transition">
+                        <div id="toastIcon" class="w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-lg shrink-0"></div>
+                        <div>
+                            <h4 id="toastName" class="font-bold text-sm">--</h4>
+                            <p id="toastDetail" class="text-xs text-slate-600">--</p>
+                        </div>
+                    </div>
+
+                    <!-- List of Scanned Students Today -->
+                    <div class="flex-grow overflow-y-auto max-h-[380px] space-y-2 pr-1" id="todayLogList">
+                        <div class="text-center text-slate-400 py-10 text-sm">
+                            Belum ada presensi dicatat hari ini.
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 2: DATA MURID -->
+        <section id="studentsTab" class="tab-content hidden space-y-4">
+            <div class="bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-slate-200">
+                <div class="flex flex-col md:flex-row justify-between md:items-center gap-4 mb-6">
+                    <div>
+                        <h2 class="font-bold text-lg text-slate-800">Manajemen Data Murid</h2>
+                        <p class="text-xs text-slate-500">Kelola daftar siswa, cetak kartu, atau import file data sekolah.</p>
+                    </div>
+
+                    <div class="flex flex-wrap gap-2">
+                        <button onclick="openAddStudentModal()" class="px-3.5 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm transition">
+                            <i class="fa-solid fa-user-plus"></i> Tambah Murid
+                        </button>
+                        <button onclick="downloadExcelTemplate()" class="px-3.5 py-2 bg-slate-700 hover:bg-slate-800 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm transition">
+                            <i class="fa-solid fa-file-arrow-down"></i> Unduh Template Excel
+                        </button>
+                        <button onclick="openExcelImportModal()" class="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm transition">
+                            <i class="fa-solid fa-file-import"></i> Import Excel/CSV
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Filters -->
+                <div class="grid grid-cols-1 md:grid-cols-3 gap-3 mb-4">
+                    <input type="text" id="studentSearchInput" oninput="renderStudentsTable()" placeholder="Cari Nama / NISN..." class="px-3 py-2 text-sm border rounded-xl outline-none focus:ring-2 focus:ring-blue-500">
+                    
+                    <select id="studentClassFilter" onchange="renderStudentsTable()" class="px-3 py-2 text-sm border rounded-xl outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="ALL">Semua Kelas</option>
+                    </select>
+
+                    <select id="studentYearFilter" onchange="renderStudentsTable()" class="px-3 py-2 text-sm border rounded-xl outline-none focus:ring-2 focus:ring-blue-500">
+                        <option value="ALL">Semua Tahun Ajaran</option>
+                    </select>
+                </div>
+
+                <!-- Table -->
+                <div class="overflow-x-auto border rounded-xl">
+                    <table class="w-full text-left text-xs sm:text-sm text-slate-600">
+                        <thead class="bg-slate-50 text-slate-700 uppercase font-bold border-b">
+                            <tr>
+                                <th class="p-3">Foto</th>
+                                <th class="p-3">NISN / ID</th>
+                                <th class="p-3">Nama Murid</th>
+                                <th class="p-3">Kelas</th>
+                                <th class="p-3">Thn Ajaran</th>
+                                <th class="p-3 text-center">Aksi</th>
+                            </tr>
+                        </thead>
+                        <tbody id="studentsTableBody" class="divide-y divide-slate-100">
+                            <!-- Populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 3: BELUM ABSEN HARI INI -->
+        <section id="absentTab" class="tab-content hidden space-y-4">
+            <div class="bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-slate-200">
+                <div class="flex flex-col md:flex-row justify-between md:items-center gap-4 mb-6">
+                    <div>
+                        <h2 class="font-bold text-lg text-slate-800 flex items-center gap-2">
+                            <i class="fa-solid fa-user-xmark text-rose-500"></i> Murid Belum Absen Hari Ini
+                        </h2>
+                        <p class="text-xs text-slate-500">Daftar siswa yang belum memindai kartu presensi. Anda dapat langsung mengubah status kehadiran di sini.</p>
+                    </div>
+
+                    <div class="flex items-center gap-2">
+                        <select id="absentClassFilter" onchange="renderAbsentStudents()" class="px-3 py-2 text-xs border rounded-xl outline-none focus:ring-2 focus:ring-rose-500 bg-white">
+                            <option value="ALL">Semua Kelas</option>
+                        </select>
+                        <button onclick="copyAbsentListText()" class="px-3 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 transition">
+                            <i class="fa-solid fa-copy"></i> Salin Daftar Text
+                        </button>
+                    </div>
+                </div>
+
+                <div class="mb-4 p-3 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between">
+                    <span class="text-xs font-semibold text-amber-800" id="absentSummaryText">
+                        Memuat data belum absen...
+                    </span>
+                </div>
+
+                <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3" id="absentCardsContainer">
+                    <!-- Cards populated dynamically -->
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 4: CETAK KARTU PELAJAR -->
+        <section id="cardTab" class="tab-content hidden space-y-4">
+            <div class="bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-slate-200">
+                <div class="flex flex-col md:flex-row justify-between md:items-center gap-4 mb-6">
+                    <div>
+                        <h2 class="font-bold text-lg text-slate-800">Cetak Kartu Pelajar</h2>
+                        <p class="text-xs text-slate-500">Ukuran kartu standar 5.4 cm x 8.56 cm dengan Pas Foto 2x3 & Barcode/QR Code.</p>
+                    </div>
+
+                    <div class="flex flex-wrap gap-2">
+                        <button onclick="triggerPrintProcess()" class="px-4 py-2 bg-amber-500 hover:bg-amber-600 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-sm transition">
+                            <i class="fa-solid fa-print"></i> Cetak Kartu Disesuaikan
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Custom Logo Upload & Print Settings -->
+                <div class="p-4 bg-slate-50 border rounded-xl mb-6 grid grid-cols-1 md:grid-cols-3 gap-4 items-center">
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 mb-1">Upload Logo Sekolah Kustom:</label>
+                        <input type="file" id="customLogoInput" accept="image/*" onchange="handleLogoUpload(event)" class="text-xs text-slate-500 block w-full file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 mb-1">Filter Kelas Kartu:</label>
+                        <select id="cardClassFilter" onchange="renderCardPreviews()" class="w-full px-3 py-1.5 text-xs border rounded-lg bg-white">
+                            <option value="ALL">Semua Kelas</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-bold text-slate-700 mb-1">Format Code Kartu:</label>
+                        <select id="codeFormatType" onchange="renderCardPreviews()" class="w-full px-3 py-1.5 text-xs border rounded-lg bg-white">
+                            <option value="QR">QR Code (Rekomendasi Scanner HP)</option>
+                            <option value="BARCODE">Barcode Standard (CODE128)</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Preview Grid -->
+                <div class="text-xs font-bold text-slate-500 mb-2 flex justify-between items-center">
+                    <span>Pratinjau Cetak (Hanya murid dicentang yang akan dicetak):</span>
+                    <label class="cursor-pointer flex items-center gap-1 text-blue-600">
+                        <input type="checkbox" id="selectAllCardsCheckbox" onchange="toggleSelectAllCards(this.checked)" checked> Pilih Semua
+                    </label>
+                </div>
+
+                <div id="cardPreviewGrid" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-6 justify-items-center bg-slate-100 p-4 rounded-xl max-h-[550px] overflow-y-auto">
+                    <!-- ID Cards Preview dynamic -->
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 5: REKAP & EXPORT -->
+        <section id="reportTab" class="tab-content hidden space-y-4">
+            <div class="bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-slate-200">
+                <div class="flex flex-col md:flex-row justify-between md:items-center gap-4 mb-6">
+                    <div>
+                        <h2 class="font-bold text-lg text-slate-800">Laporan Absensi & Export</h2>
+                        <p class="text-xs text-slate-500">Filter data kehadiran dan export ke file Excel (.xlsx) atau CSV.</p>
+                    </div>
+
+                    <div class="flex gap-2">
+                        <button onclick="exportAttendanceToExcel()" class="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 transition shadow">
+                            <i class="fa-solid fa-file-excel"></i> Export Laporan Excel
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Date Range & Filter -->
+                <div class="grid grid-cols-1 md:grid-cols-4 gap-3 mb-4 bg-slate-50 p-3 rounded-xl border">
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-600 mb-1">Dari Tanggal:</label>
+                        <input type="date" id="reportStartDate" onchange="renderReportTable()" class="w-full px-3 py-1.5 text-xs border rounded-lg bg-white">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-600 mb-1">Sampai Tanggal:</label>
+                        <input type="date" id="reportEndDate" onchange="renderReportTable()" class="w-full px-3 py-1.5 text-xs border rounded-lg bg-white">
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-600 mb-1">Filter Kelas:</label>
+                        <select id="reportClassFilter" onchange="renderReportTable()" class="w-full px-3 py-1.5 text-xs border rounded-lg bg-white">
+                            <option value="ALL">Semua Kelas</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="block text-xs font-semibold text-slate-600 mb-1">Status Kehadiran:</label>
+                        <select id="reportStatusFilter" onchange="renderReportTable()" class="w-full px-3 py-1.5 text-xs border rounded-lg bg-white">
+                            <option value="ALL">Semua Status</option>
+                            <option value="Hadir">Hadir</option>
+                            <option value="Sakit">Sakit</option>
+                            <option value="Ijin">Ijin</option>
+                            <option value="Alpa">Alpa</option>
+                        </select>
+                    </div>
+                </div>
+
+                <!-- Report Table -->
+                <div class="overflow-x-auto border rounded-xl">
+                    <table class="w-full text-left text-xs sm:text-sm text-slate-600">
+                        <thead class="bg-slate-50 text-slate-700 uppercase font-bold border-b">
+                            <tr>
+                                <th class="p-3">Tanggal</th>
+                                <th class="p-3">Waktu</th>
+                                <th class="p-3">NISN</th>
+                                <th class="p-3">Nama Murid</th>
+                                <th class="p-3">Kelas</th>
+                                <th class="p-3">Status</th>
+                                <th class="p-3 text-center">Aksi</th>
+                            </tr>
+                        </thead>
+                        <tbody id="reportTableBody" class="divide-y divide-slate-100">
+                            <!-- Populated dynamically -->
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 6: BACKUP & DATABASE -->
+        <section id="settingsTab" class="tab-content hidden space-y-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <!-- Backup & Restore -->
+                <div class="bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-slate-200">
+                    <h3 class="font-bold text-base text-slate-800 mb-2 flex items-center gap-2">
+                        <i class="fa-solid fa-floppy-disk text-indigo-600"></i> Backup & Restore Data Local
+                    </h3>
+                    <p class="text-xs text-slate-500 mb-4">Simpan cadangan seluruh data murid dan presensi dalam file JSON untuk dipindahkan atau disimpan aman.</p>
+
+                    <div class="space-y-3">
+                        <button onclick="backupDatabaseJSON()" class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition">
+                            <i class="fa-solid fa-download"></i> Unduh Cadangan Backup JSON
+                        </button>
+
+                        <div class="border-t pt-3">
+                            <label class="block text-xs font-semibold text-slate-600 mb-1">Restore Database dari File JSON:</label>
+                            <input type="file" id="restoreJsonInput" accept=".json" onchange="restoreDatabaseJSON(event)" class="text-xs text-slate-500 block w-full file:mr-2 file:py-1.5 file:px-3 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100">
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Database Reset Actions -->
+                <div class="bg-white p-4 md:p-6 rounded-2xl shadow-sm border border-slate-200">
+                    <h3 class="font-bold text-base text-slate-800 mb-2 flex items-center gap-2 text-rose-600">
+                        <i class="fa-solid fa-triangle-exclamation"></i> Reset Kehadiran & Database
+                    </h3>
+                    <p class="text-xs text-slate-500 mb-4">Gunakan dengan hati-hati saat pergantian semester atau reset absensi harian.</p>
+
+                    <div class="space-y-3">
+                        <button onclick="confirmResetTodayAttendance()" class="w-full py-2.5 bg-amber-500 hover:bg-amber-600 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition">
+                            <i class="fa-solid fa-rotate-left"></i> Reset Absensi Hari Ini
+                        </button>
+
+                        <button onclick="confirmResetAllAttendance()" class="w-full py-2.5 bg-rose-600 hover:bg-rose-700 text-white rounded-xl font-bold text-xs flex items-center justify-center gap-2 transition">
+                            <i class="fa-solid fa-trash"></i> Hapus Seluruh Riwayat Absensi
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <!-- HIDDEN PRINT AREA FOR EXACT PRINT SIZE -->
+    <div id="printArea" class="hidden">
+        <div id="printableCardsContainer" class="flex flex-wrap gap-4 justify-center"></div>
+    </div>
+
+    <!-- MODAL: Tambah/Edit Murid -->
+    <div id="studentModal" class="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 hidden no-print">
+        <div class="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div class="flex justify-between items-center border-b pb-3">
+                <h3 id="studentModalTitle" class="font-bold text-base text-slate-800">Tambah Murid Baru</h3>
+                <button onclick="closeStudentModal()" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark text-lg"></i></button>
+            </div>
+
+            <form onsubmit="saveStudentForm(event)" class="space-y-3 text-xs">
+                <input type="hidden" id="editStudentId">
+                <div>
+                    <label class="block font-semibold text-slate-600 mb-1">NISN / Nomor Induk *</label>
+                    <input type="text" id="modalNisn" required class="w-full px-3 py-2 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+                <div>
+                    <label class="block font-semibold text-slate-600 mb-1">Nama Lengkap Murid *</label>
+                    <input type="text" id="modalNama" required class="w-full px-3 py-2 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500">
+                </div>
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="block font-semibold text-slate-600 mb-1">Kelas *</label>
+                        <input type="text" id="modalKelas" required placeholder="mis. VII-A" class="w-full px-3 py-2 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                    <div>
+                        <label class="block font-semibold text-slate-600 mb-1">Tahun Ajaran *</label>
+                        <input type="text" id="modalTahun" required placeholder="2025/2026" class="w-full px-3 py-2 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500">
+                    </div>
+                </div>
+                <div>
+                    <label class="block font-semibold text-slate-600 mb-1">Upload Foto Murid (Rasio 2x3)</label>
+                    <input type="file" id="modalFotoInput" accept="image/*" onchange="handleStudentPhotoUpload(event)" class="w-full text-slate-500">
+                    <img id="modalFotoPreview" src="https://placehold.co/200x300/e2e8f0/64748b?text=Pas+Foto+2x3" class="w-16 h-24 object-cover mt-2 rounded border">
+                </div>
+
+                <div class="flex justify-end gap-2 pt-2 border-t">
+                    <button type="button" onclick="closeStudentModal()" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-semibold rounded-xl">Batal</button>
+                    <button type="submit" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl">Simpan Murid</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <!-- MODAL: Import Excel -->
+    <div id="excelModal" class="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 hidden no-print">
+        <div class="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+            <div class="flex justify-between items-center border-b pb-3">
+                <h3 class="font-bold text-base text-slate-800">Import Data Murid dari Excel / CSV</h3>
+                <button onclick="closeExcelModal()" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark text-lg"></i></button>
+            </div>
+
+            <div class="space-y-3 text-xs">
+                <p class="text-slate-600">Pastikan file Excel/CSV memiliki kolom header wajib: <span class="font-bold text-slate-800">nisn, nama, kelas, tahun_ajaran</span></p>
+                
+                <div class="p-3.5 bg-blue-50 border border-blue-200 rounded-xl flex items-center justify-between gap-3">
+                    <div class="flex items-center gap-2.5 text-blue-900">
+                        <i class="fa-solid fa-file-excel text-2xl text-emerald-600"></i>
+                        <div>
+                            <p class="font-bold text-xs text-slate-800">Belum punya format file?</p>
+                            <p class="text-xxs text-slate-500">Unduh contoh template Excel resmi yang siap diisi.</p>
+                        </div>
+                    </div>
+                    <button onclick="downloadExcelTemplate()" class="px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-xs font-bold rounded-xl shadow-sm transition flex items-center gap-1.5 shrink-0">
+                        <i class="fa-solid fa-download"></i> Unduh Template
+                    </button>
+                </div>
+
+                <div class="p-4 border-2 border-dashed border-emerald-300 rounded-xl bg-slate-50 text-center hover:bg-emerald-50/50 transition">
+                    <input type="file" id="excelFileInput" accept=".xlsx, .xls, .csv" class="hidden" onchange="processExcelImport(event)">
+                    <label for="excelFileInput" class="cursor-pointer flex flex-col items-center justify-center gap-2">
+                        <i class="fa-solid fa-file-excel text-3xl text-emerald-600"></i>
+                        <span class="font-bold text-slate-700">Pilih File Excel atau CSV</span>
+                        <span class="text-slate-400 text-xxs">Klik untuk menjelajah file dari perangkat</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="flex justify-end border-t pt-3">
+                <button onclick="closeExcelModal()" class="px-4 py-2 bg-slate-100 text-slate-700 font-semibold rounded-xl text-xs">Tutup</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Modal Dialog Alert/Confirm -->
+    <div id="customAlertModal" class="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 hidden no-print">
+        <div class="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl text-center space-y-3">
+            <div id="customAlertIcon" class="text-3xl text-blue-600"></div>
+            <h3 id="customAlertTitle" class="font-bold text-base text-slate-800">Pemberitahuan</h3>
+            <p id="customAlertMessage" class="text-xs text-slate-600">--</p>
+            <div class="flex justify-center gap-2 pt-2">
+                <button id="customAlertCancelBtn" onclick="closeCustomAlert()" class="px-4 py-1.5 bg-slate-200 text-slate-700 text-xs font-semibold rounded-xl hidden">Batal</button>
+                <button id="customAlertConfirmBtn" onclick="closeCustomAlert()" class="px-4 py-1.5 bg-blue-600 text-white text-xs font-semibold rounded-xl">OK</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL: Ubah Status Kehadiran -->
+    <div id="statusModal" class="fixed inset-0 bg-slate-900/50 flex items-center justify-center z-50 hidden no-print">
+        <div class="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4">
+            <div class="flex justify-between items-center border-b pb-3">
+                <h3 class="font-bold text-base text-slate-800">Ubah Status Kehadiran</h3>
+                <button onclick="closeStatusModal()" class="text-slate-400 hover:text-slate-600"><i class="fa-solid fa-xmark text-lg"></i></button>
+            </div>
+
+            <form onsubmit="saveAttendanceStatusForm(event)" class="space-y-3 text-xs">
+                <input type="hidden" id="statusModalNisn">
+                <input type="hidden" id="statusModalDate">
+
+                <div>
+                    <label class="block font-semibold text-slate-500 mb-0.5">Nama Murid:</label>
+                    <p id="statusModalNama" class="font-bold text-slate-800 text-sm">--</p>
+                </div>
+
+                <div class="grid grid-cols-2 gap-2">
+                    <div>
+                        <label class="block font-semibold text-slate-500 mb-0.5">Kelas:</label>
+                        <p id="statusModalKelas" class="font-bold text-slate-700">--</p>
+                    </div>
+                    <div>
+                        <label class="block font-semibold text-slate-500 mb-0.5">Tanggal:</label>
+                        <p id="statusModalTanggal" class="font-bold text-slate-700">--</p>
+                    </div>
+                </div>
+
+                <div>
+                    <label class="block font-bold text-slate-700 mb-1">Pilih Status Kehadiran Baru:</label>
+                    <select id="statusModalSelect" class="w-full px-3 py-2 border rounded-xl outline-none focus:ring-2 focus:ring-blue-500 font-semibold bg-white">
+                        <option value="Hadir">Hadir</option>
+                        <option value="Sakit">Sakit</option>
+                        <option value="Ijin">Ijin</option>
+                        <option value="Alpa">Alpa</option>
+                    </select>
+                </div>
+
+                <div class="flex justify-end gap-2 pt-3 border-t">
+                    <button type="button" onclick="closeStatusModal()" class="px-4 py-2 bg-slate-100 text-slate-700 font-semibold rounded-xl">Batal</button>
+                    <button type="submit" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white font-semibold rounded-xl">Simpan Status</button>
+                </div>
+            </form>
+        </div>
+    </div>
+
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, collection, doc, setDoc, getDocs, onSnapshot, deleteDoc, writeBatch } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Expose Default Logo & State Globally
+        window.DEFAULT_LOGO_179 = "https://iili.io/CZUdvRa.jpg";
+
+        window.state = {
+            students: [],
+            attendances: [],
+            customLogo: null,
+            html5QrCode: null,
+            currentFacingMode: "environment",
+            tempStudentPhoto: null,
+            currentUser: null,
+            selectedCardNisns: new Set()
+        };
+
+        // Firebase Configuration & Initialization
+        const firebaseConfig = typeof __firebase_config !== 'undefined' 
+            ? JSON.parse(__firebase_config) 
+            : {
+                apiKey: "demo-api-key",
+                authDomain: "demo-app.firebaseapp.com",
+                projectId: "demo-app",
+                storageBucket: "demo-app.appspot.com",
+                messagingSenderId: "123456789",
+                appId: "1:123456789:web:abcdef"
+            };
+
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'smpn179-absensi-app';
+
+        let app, auth, db;
+        try {
+            app = initializeApp(firebaseConfig);
+            auth = getAuth(app);
+            db = getFirestore(app);
+        } catch (e) {
+            console.warn("Firebase Init Exception:", e);
+        }
+
+        // Helper to load/save local storage fallback data
+        window.loadFromLocalStorage = function() {
+            try {
+                const storedStudents = localStorage.getItem('smp179_students');
+                const storedAttendances = localStorage.getItem('smp179_attendances');
+                if (storedStudents) window.state.students = JSON.parse(storedStudents);
+                if (storedAttendances) window.state.attendances = JSON.parse(storedAttendances);
+            } catch (e) {
+                console.error("Local Storage Read Error:", e);
+            }
+        };
+
+        window.saveToLocalStorage = function() {
+            try {
+                localStorage.setItem('smp179_students', JSON.stringify(window.state.students));
+                localStorage.setItem('smp179_attendances', JSON.stringify(window.state.attendances));
+            } catch (e) {
+                console.error("Local Storage Write Error:", e);
+            }
+        };
+
+        // Authenticate & Bind Firestore
+        async function initAuthAndData() {
+            window.loadFromLocalStorage();
+
+            if (!db) {
+                document.getElementById('cloudStatus').innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-400"></span> Mode Lokal`;
+                if (window.refreshAllUI) window.refreshAllUI();
+                return;
+            }
+
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+                
+                window.state.currentUser = auth.currentUser;
+                document.getElementById('cloudStatus').innerHTML = `<span class="w-2 h-2 rounded-full bg-emerald-400 animate-pulse"></span> Online Firestore`;
+
+                // Firestore Collection References
+                const studentsColl = collection(db, 'artifacts', appId, 'public', 'data', 'students');
+                const attendancesColl = collection(db, 'artifacts', appId, 'public', 'data', 'attendances');
+
+                // Realtime Sync Students with error tolerance
+                onSnapshot(studentsColl, (snapshot) => {
+                    if (snapshot && snapshot.docs) {
+                        window.state.students = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        window.saveToLocalStorage();
+                    }
+                    if (window.refreshAllUI) window.refreshAllUI();
+                }, (error) => {
+                    console.warn("Firestore Student Sync Warning (Falling back to local):", error.message);
+                    document.getElementById('cloudStatus').innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-400"></span> Mode Lokal`;
+                    if (window.refreshAllUI) window.refreshAllUI();
+                });
+
+                // Realtime Sync Attendance with error tolerance
+                onSnapshot(attendancesColl, (snapshot) => {
+                    if (snapshot && snapshot.docs) {
+                        window.state.attendances = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+                        window.saveToLocalStorage();
+                    }
+                    if (window.refreshAllUI) window.refreshAllUI();
+                }, (error) => {
+                    console.warn("Firestore Attendance Sync Warning (Falling back to local):", error.message);
+                    document.getElementById('cloudStatus').innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-400"></span> Mode Lokal`;
+                    if (window.refreshAllUI) window.refreshAllUI();
+                });
+
+            } catch (err) {
+                console.warn("Cloud Auth/Init Warning (Fallback to Local):", err);
+                document.getElementById('cloudStatus').innerHTML = `<span class="w-2 h-2 rounded-full bg-amber-400"></span> Mode Lokal`;
+                if (window.refreshAllUI) window.refreshAllUI();
+            }
+        }
+
+        // Expose Firebase write functions with smooth LocalStorage fallback
+        window.dbMethods = {
+            saveStudent: async (studentData) => {
+                const idx = window.state.students.findIndex(s => s.nisn === studentData.nisn);
+                if (idx >= 0) window.state.students[idx] = studentData;
+                else window.state.students.push(studentData);
+                window.saveToLocalStorage();
+
+                if (db) {
+                    try {
+                        const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'students', studentData.nisn);
+                        await setDoc(docRef, studentData, { merge: true });
+                    } catch (e) {
+                        console.warn("Firestore save fallback to local:", e.message);
+                    }
+                }
+            },
+            deleteStudent: async (nisn) => {
+                window.state.students = window.state.students.filter(s => s.nisn !== nisn);
+                window.saveToLocalStorage();
+
+                if (db) {
+                    try {
+                        const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'students', nisn);
+                        await deleteDoc(docRef);
+                    } catch (e) {
+                        console.warn("Firestore delete fallback to local:", e.message);
+                    }
+                }
+            },
+            recordAttendance: async (attendanceRecord) => {
+                const docId = `${attendanceRecord.nisn}_${attendanceRecord.date}`;
+                const idx = window.state.attendances.findIndex(a => a.id === docId);
+                if (idx >= 0) window.state.attendances[idx] = attendanceRecord;
+                else window.state.attendances.push(attendanceRecord);
+                window.saveToLocalStorage();
+
+                if (db) {
+                    try {
+                        const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendances', docId);
+                        await setDoc(docRef, attendanceRecord, { merge: true });
+                    } catch (e) {
+                        console.warn("Firestore record fallback to local:", e.message);
+                    }
+                }
+            },
+            clearTodayAttendances: async (todayDate) => {
+                window.state.attendances = window.state.attendances.filter(a => a.date !== todayDate);
+                window.saveToLocalStorage();
+
+                if (db) {
+                    try {
+                        const batch = writeBatch(db);
+                        window.state.attendances.filter(a => a.date === todayDate).forEach(a => {
+                            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendances', a.id);
+                            batch.delete(docRef);
+                        });
+                        await batch.commit();
+                    } catch (e) {
+                        console.warn("Firestore reset today fallback to local:", e.message);
+                    }
+                }
+            },
+            clearAllAttendances: async () => {
+                const oldList = [...window.state.attendances];
+                window.state.attendances = [];
+                window.saveToLocalStorage();
+
+                if (db) {
+                    try {
+                        const batch = writeBatch(db);
+                        oldList.forEach(a => {
+                            const docRef = doc(db, 'artifacts', appId, 'public', 'data', 'attendances', a.id);
+                            batch.delete(docRef);
+                        });
+                        await batch.commit();
+                    } catch (e) {
+                        console.warn("Firestore clear all fallback to local:", e.message);
+                    }
+                }
+            }
+        };
+
+        window.addEventListener('DOMContentLoaded', () => {
+            initAuthAndData();
+            if (window.initApp) window.initApp();
+        });
+    </script>
+
+    <script>
+        // Date Formatter Helper
+        function getTodayFormatted() {
+            const d = new Date();
+            const year = d.getFullYear();
+            const month = String(d.getMonth() + 1).padStart(2, '0');
+            const day = String(d.getDate()).padStart(2, '0');
+            return `${year}-${month}-${day}`;
+        }
+
+        function getTimeFormatted() {
+            const d = new Date();
+            return d.toTimeString().split(' ')[0];
+        }
+
+        // App Initialization
+        function initApp() {
+            document.getElementById('todayDate').innerText = getTodayFormatted();
+            document.getElementById('reportStartDate').value = getTodayFormatted();
+            document.getElementById('reportEndDate').value = getTodayFormatted();
+            
+            // Seed sample data if database empty
+            if (!localStorage.getItem('smp179_initialized')) {
+                seedInitialSampleData();
+                localStorage.setItem('smp179_initialized', 'true');
+            }
+
+            // Start QR Camera Scanner
+            startQrScanner();
+            refreshAllUI();
+        }
+
+        function seedInitialSampleData() {
+            const sampleStudents = [
+                { nisn: "0081234567", nama: "Ahmad Rizky Pratama", kelas: "VII-A", tahun: "2025/2026", foto: null },
+                { nisn: "0081234568", nama: "Siti Nurhaliza", kelas: "VII-A", tahun: "2025/2026", foto: null },
+                { nisn: "0081234569", nama: "Budi Santoso", kelas: "VII-B", tahun: "2025/2026", foto: null },
+                { nisn: "0081234570", nama: "Dewi Lestari", kelas: "VIII-A", tahun: "2025/2026", foto: null }
+            ];
+
+            sampleStudents.forEach(st => {
+                if (window.dbMethods) window.dbMethods.saveStudent(st);
+            });
+        }
+
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-content').forEach(el => el.classList.add('hidden'));
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('bg-blue-600', 'text-white', 'shadow-md');
+                btn.classList.add('bg-white', 'text-slate-600');
+            });
+
+            const targetContent = document.getElementById(tabId);
+            const targetBtn = document.getElementById(`tab-${tabId}`);
+
+            if (targetContent) targetContent.classList.remove('hidden');
+            if (targetBtn) {
+                targetBtn.classList.remove('bg-white', 'text-slate-600');
+                targetBtn.classList.add('bg-blue-600', 'text-white', 'shadow-md');
+            }
+
+            // Camera lifecycle
+            if (tabId === 'scanTab') {
+                startQrScanner();
+            } else {
+                stopQrScanner();
+            }
+
+            refreshAllUI();
+        }
+
+        function startQrScanner() {
+            if (window.state && window.state.html5QrCode) {
+                stopQrScanner();
+            }
+
+            const qrCodeSuccessCallback = (decodedText, decodedResult) => {
+                handleScanSuccess(decodedText.trim());
+            };
+
+            const config = { fps: 10, qrbox: { width: 220, height: 220 } };
+
+            try {
+                window.state.html5QrCode = new Html5Qrcode("qr-reader");
+                window.state.html5QrCode.start(
+                    { facingMode: window.state.currentFacingMode },
+                    config,
+                    qrCodeSuccessCallback
+                ).catch(err => {
+                    console.warn("Camera start warning:", err);
+                });
+            } catch (e) {
+                console.warn("QR Reader Init Warning:", e);
+            }
+        }
+
+        function stopQrScanner() {
+            if (window.state && window.state.html5QrCode) {
+                window.state.html5QrCode.stop().then(() => {
+                    window.state.html5QrCode.clear();
+                    window.state.html5QrCode = null;
+                }).catch(() => {});
+            }
+        }
+
+        function toggleCameraFacing() {
+            if (!window.state) return;
+            window.state.currentFacingMode = window.state.currentFacingMode === "environment" ? "user" : "environment";
+            document.getElementById('camFacingText').innerText = window.state.currentFacingMode === "environment" ? "Belakang" : "Depan";
+            startQrScanner();
+        }
+
+        // Handle Scan Success / Manual Input
+        function handleScanSuccess(scannedCode) {
+            playBeepSound();
+
+            const today = getTodayFormatted();
+            const student = window.state.students.find(s => s.nisn === scannedCode || s.id === scannedCode);
+
+            const toast = document.getElementById('scanResultToast');
+            const toastIcon = document.getElementById('toastIcon');
+            const toastName = document.getElementById('toastName');
+            const toastDetail = document.getElementById('toastDetail');
+
+            toast.classList.remove('hidden', 'bg-emerald-50', 'bg-rose-50', 'bg-amber-50', 'border-emerald-200', 'border-rose-200', 'border-amber-200');
+
+            if (!student) {
+                // Not found
+                toast.classList.add('bg-rose-50', 'border-rose-200');
+                toastIcon.className = "w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-lg bg-rose-500 shrink-0";
+                toastIcon.innerHTML = `<i class="fa-solid fa-xmark"></i>`;
+                toastName.innerText = "Kartu Tidak Terdaftar";
+                toastDetail.innerText = `Kode: ${scannedCode} tidak cocok dengan data murid.`;
+                return;
+            }
+
+            // Check if already scanned today
+            const alreadyScanned = window.state.attendances.find(a => a.nisn === student.nisn && a.date === today);
+
+            if (alreadyScanned) {
+                toast.classList.add('bg-amber-50', 'border-amber-200');
+                toastIcon.className = "w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-lg bg-amber-500 shrink-0";
+                toastIcon.innerHTML = `<i class="fa-solid fa-exclamation"></i>`;
+                toastName.innerText = student.nama;
+                toastDetail.innerText = `Sudah melakukan absen (${alreadyScanned.status}) jam ${alreadyScanned.time} WIB.`;
+                return;
+            }
+
+            // Save Attendance Record
+            const record = {
+                id: `${student.nisn}_${today}`,
+                nisn: student.nisn,
+                nama: student.nama,
+                kelas: student.kelas,
+                date: today,
+                time: getTimeFormatted(),
+                status: 'Hadir'
+            };
+
+            if (window.dbMethods) {
+                window.dbMethods.recordAttendance(record);
+            }
+
+            toast.classList.add('bg-emerald-50', 'border-emerald-200');
+            toastIcon.className = "w-10 h-10 rounded-full flex items-center justify-center text-white font-bold text-lg bg-emerald-500 shrink-0";
+            toastIcon.innerHTML = `<i class="fa-solid fa-check"></i>`;
+            toastName.innerText = student.nama;
+            toastDetail.innerText = `Berhasil Absen - ${student.kelas} (${record.time} WIB)`;
+
+            refreshAllUI();
+        }
+
+        function handleManualSubmit(e) {
+            e.preventDefault();
+            const val = document.getElementById('manualNisnInput').value.trim();
+            if (val) {
+                handleScanSuccess(val);
+                document.getElementById('manualNisnInput').value = '';
+            }
+        }
+
+        function playBeepSound() {
+            try {
+                const ctx = new (window.AudioContext || window.webkitAudioContext)();
+                const osc = ctx.createOscillator();
+                const gain = ctx.createGain();
+                osc.type = "sine";
+                osc.frequency.setValueAtTime(880, ctx.currentTime);
+                gain.gain.setValueAtTime(0.1, ctx.currentTime);
+                osc.connect(gain);
+                gain.connect(ctx.destination);
+                osc.start();
+                osc.stop(ctx.currentTime + 0.15);
+            } catch (e) {}
+        }
+
+        function refreshAllUI() {
+            populateClassDropdowns();
+            renderTodayLog();
+            renderStudentsTable();
+            renderAbsentStudents();
+            renderCardPreviews();
+            renderReportTable();
+        }
+
+        function populateClassDropdowns() {
+            if (!window.state || !window.state.students) return;
+
+            const classes = Array.from(new Set(window.state.students.map(s => s.kelas))).sort();
+            const years = Array.from(new Set(window.state.students.map(s => s.tahun))).sort();
+
+            const studentClassFilter = document.getElementById('studentClassFilter');
+            const absentClassFilter = document.getElementById('absentClassFilter');
+            const cardClassFilter = document.getElementById('cardClassFilter');
+            const reportClassFilter = document.getElementById('reportClassFilter');
+            const studentYearFilter = document.getElementById('studentYearFilter');
+
+            const classOptionsHtml = `<option value="ALL">Semua Kelas</option>` + classes.map(c => `<option value="${c}">${c}</option>`).join('');
+            const yearOptionsHtml = `<option value="ALL">Semua Tahun Ajaran</option>` + years.map(y => `<option value="${y}">${y}</option>`).join('');
+
+            if (studentClassFilter) {
+                const curr = studentClassFilter.value;
+                studentClassFilter.innerHTML = classOptionsHtml;
+                studentClassFilter.value = classes.includes(curr) ? curr : "ALL";
+            }
+            if (absentClassFilter) {
+                const curr = absentClassFilter.value;
+                absentClassFilter.innerHTML = classOptionsHtml;
+                absentClassFilter.value = classes.includes(curr) ? curr : "ALL";
+            }
+            if (cardClassFilter) {
+                const curr = cardClassFilter.value;
+                cardClassFilter.innerHTML = classOptionsHtml;
+                cardClassFilter.value = classes.includes(curr) ? curr : "ALL";
+            }
+            if (reportClassFilter) {
+                const curr = reportClassFilter.value;
+                reportClassFilter.innerHTML = classOptionsHtml;
+                reportClassFilter.value = classes.includes(curr) ? curr : "ALL";
+            }
+            if (studentYearFilter) {
+                const curr = studentYearFilter.value;
+                studentYearFilter.innerHTML = yearOptionsHtml;
+                studentYearFilter.value = years.includes(curr) ? curr : "ALL";
+            }
+        }
+
+        function getStatusBadge(status) {
+            switch (status) {
+                case 'Hadir':
+                    return `<span class="px-2 py-0.5 bg-emerald-100 text-emerald-800 font-bold rounded-lg text-xs inline-flex items-center gap-1"><i class="fa-solid fa-check text-xxs"></i> Hadir</span>`;
+                case 'Sakit':
+                    return `<span class="px-2 py-0.5 bg-blue-100 text-blue-800 font-bold rounded-lg text-xs inline-flex items-center gap-1"><i class="fa-solid fa-notes-medical text-xxs"></i> Sakit</span>`;
+                case 'Ijin':
+                    return `<span class="px-2 py-0.5 bg-amber-100 text-amber-800 font-bold rounded-lg text-xs inline-flex items-center gap-1"><i class="fa-solid fa-envelope text-xxs"></i> Ijin</span>`;
+                case 'Alpa':
+                    return `<span class="px-2 py-0.5 bg-rose-100 text-rose-800 font-bold rounded-lg text-xs inline-flex items-center gap-1"><i class="fa-solid fa-xmark text-xxs"></i> Alpa</span>`;
+                default:
+                    return `<span class="px-2 py-0.5 bg-slate-100 text-slate-600 font-semibold rounded-lg text-xs">Belum Absen Hari Ini</span>`;
+            }
+        }
+
+        function renderTodayLog() {
+            if (!window.state || !window.state.attendances) return;
+
+            const today = getTodayFormatted();
+            const todayLogs = window.state.attendances
+                .filter(a => a.date === today)
+                .sort((a, b) => b.time.localeCompare(a.time));
+
+            const hadirCount = todayLogs.filter(a => a.status === 'Hadir').length;
+            document.getElementById('todayCountBadge').innerText = `${hadirCount} Hadir (${todayLogs.length} Dicatat)`;
+
+            const container = document.getElementById('todayLogList');
+            if (todayLogs.length === 0) {
+                container.innerHTML = `<div class="text-center text-slate-400 py-10 text-xs">Belum ada presensi dicatat hari ini.</div>`;
+                return;
+            }
+
+            container.innerHTML = todayLogs.map(log => `
+                <div class="p-3 bg-slate-50 border rounded-xl flex justify-between items-center text-xs gap-2">
+                    <div>
+                        <div class="flex items-center gap-2 flex-wrap">
+                            <h5 class="font-bold text-slate-800">${log.nama}</h5>
+                            ${getStatusBadge(log.status)}
+                        </div>
+                        <p class="text-slate-500 mt-0.5">${log.kelas} - NISN: ${log.nisn} (${log.time} WIB)</p>
+                    </div>
+                    <button onclick="openStatusModal('${log.nisn}', '${today}')" class="px-2.5 py-1.5 bg-white border border-slate-300 hover:bg-slate-100 text-slate-700 font-semibold text-xs rounded-lg transition flex items-center gap-1 shadow-sm shrink-0">
+                        <i class="fa-solid fa-pen-to-square text-blue-600"></i> Ubah
+                    </button>
+                </div>
+            `).join('');
+        }
+
+        function renderStudentsTable() {
+            if (!window.state || !window.state.students) return;
+
+            const search = (document.getElementById('studentSearchInput').value || '').toLowerCase();
+            const classFilter = document.getElementById('studentClassFilter').value;
+            const yearFilter = document.getElementById('studentYearFilter').value;
+
+            const filtered = window.state.students.filter(s => {
+                const matchSearch = (s.nama || '').toLowerCase().includes(search) || (s.nisn || '').includes(search);
+                const matchClass = classFilter === 'ALL' || s.kelas === classFilter;
+                const matchYear = yearFilter === 'ALL' || s.tahun === yearFilter;
+                return matchSearch && matchClass && matchYear;
+            });
+
+            const tbody = document.getElementById('studentsTableBody');
+            if (filtered.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="6" class="text-center py-6 text-slate-400">Tidak ada data murid.</td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = filtered.map(s => `
+                <tr class="hover:bg-slate-50 transition">
+                    <td class="p-3">
+                        <img src="${s.foto || 'https://placehold.co/100x150/e2e8f0/64748b?text=2x3'}" class="w-8 h-12 object-cover rounded border">
+                    </td>
+                    <td class="p-3 font-semibold text-slate-700">${s.nisn}</td>
+                    <td class="p-3 font-bold text-slate-900">${s.nama}</td>
+                    <td class="p-3"><span class="px-2 py-0.5 bg-blue-50 text-blue-700 font-bold rounded">${s.kelas}</span></td>
+                    <td class="p-3">${s.tahun}</td>
+                    <td class="p-3 text-center space-x-2">
+                        <button onclick="editStudent('${s.nisn}')" class="text-blue-600 hover:text-blue-800 p-1"><i class="fa-solid fa-pen-to-square"></i></button>
+                        <button onclick="deleteStudentConfirm('${s.nisn}')" class="text-rose-600 hover:text-rose-800 p-1"><i class="fa-solid fa-trash"></i></button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        function renderAbsentStudents() {
+            if (!window.state || !window.state.students) return;
+
+            const today = getTodayFormatted();
+            const classFilter = document.getElementById('absentClassFilter').value;
+
+            // Scanned / Recorded IDs today
+            const recordedNisns = new Set(window.state.attendances.filter(a => a.date === today).map(a => a.nisn));
+
+            const absentStudents = window.state.students.filter(s => {
+                const isAbsent = !recordedNisns.has(s.nisn);
+                const matchClass = classFilter === 'ALL' || s.kelas === classFilter;
+                return isAbsent && matchClass;
+            });
+
+            const summaryEl = document.getElementById('absentSummaryText');
+            summaryEl.innerText = `Total Murid Belum Absen Hari Ini: ${absentStudents.length} Orang`;
+
+            const container = document.getElementById('absentCardsContainer');
+            if (absentStudents.length === 0) {
+                container.innerHTML = `<div class="col-span-full text-center py-10 text-emerald-600 font-bold text-sm">Semua murid telah dicatat kehadirannya! 🎉</div>`;
+                return;
+            }
+
+            container.innerHTML = absentStudents.map(s => `
+                <div class="p-3 bg-rose-50/40 border border-rose-200 rounded-xl flex flex-col justify-between gap-3">
+                    <div class="flex items-center gap-3">
+                        <img src="${s.foto || 'https://placehold.co/100x150/e2e8f0/64748b?text=2x3'}" class="w-10 h-14 object-cover rounded border shrink-0">
+                        <div>
+                            <h4 class="font-bold text-sm text-slate-800">${s.nama}</h4>
+                            <p class="text-xs text-slate-500">Kelas: <span class="font-semibold text-slate-700">${s.kelas}</span> | NISN: ${s.nisn}</p>
+                            <span class="inline-block mt-1 px-2 py-0.5 bg-slate-200 text-slate-700 text-xxs font-bold rounded">Belum Absen Hari Ini</span>
+                        </div>
+                    </div>
+
+                    <div class="border-t border-rose-200/60 pt-2 flex flex-wrap gap-1 text-xxs">
+                        <span class="text-slate-500 text-xs w-full mb-1 font-medium">Ubah Kehadiran:</span>
+                        <button onclick="quickSetStatus('${s.nisn}', 'Hadir')" class="px-2 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-lg transition">Hadir</button>
+                        <button onclick="quickSetStatus('${s.nisn}', 'Sakit')" class="px-2 py-1 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-lg transition">Sakit</button>
+                        <button onclick="quickSetStatus('${s.nisn}', 'Ijin')" class="px-2 py-1 bg-amber-500 hover:bg-amber-600 text-white font-bold rounded-lg transition">Ijin</button>
+                        <button onclick="quickSetStatus('${s.nisn}', 'Alpa')" class="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white font-bold rounded-lg transition">Alpa</button>
+                    </div>
+                </div>
+            `).join('');
+        }
+
+        function quickSetStatus(nisn, status) {
+            const today = getTodayFormatted();
+            const student = window.state.students.find(s => s.nisn === nisn);
+            if (!student) return;
+
+            const record = {
+                id: `${student.nisn}_${today}`,
+                nisn: student.nisn,
+                nama: student.nama,
+                kelas: student.kelas,
+                date: today,
+                time: getTimeFormatted(),
+                status: status
+            };
+
+            if (window.dbMethods) {
+                window.dbMethods.recordAttendance(record);
+            }
+
+            refreshAllUI();
+        }
+
+        function copyAbsentListText() {
+            const today = getTodayFormatted();
+            const classFilter = document.getElementById('absentClassFilter').value;
+            const recordedNisns = new Set(window.state.attendances.filter(a => a.date === today).map(a => a.nisn));
+
+            const absentStudents = window.state.students.filter(s => {
+                const isAbsent = !recordedNisns.has(s.nisn);
+                const matchClass = classFilter === 'ALL' || s.kelas === classFilter;
+                return isAbsent && matchClass;
+            });
+
+            if (absentStudents.length === 0) {
+                showCustomAlert("Informasi", "Tidak ada murid belum absen untuk disalin.");
+                return;
+            }
+
+            let text = `DAFTAR SISWA BELUM ABSEN (${today})\nSMP NEGERI 179 JAKARTA\n------------------------------------\n`;
+            absentStudents.forEach((s, idx) => {
+                text += `${idx + 1}. ${s.nama} (${s.kelas} - NISN: ${s.nisn})\n`;
+            });
+
+            const textarea = document.createElement('textarea');
+            textarea.value = text;
+            document.body.appendChild(textarea);
+            textarea.select();
+            document.execCommand('copy');
+            document.body.removeChild(textarea);
+
+            showCustomAlert("Berhasil Disalin", `Daftar ${absentStudents.length} murid belum absen telah disalin ke clipboard!`);
+        }
+
+        function openStatusModal(nisn, date) {
+            const student = window.state.students.find(s => s.nisn === nisn);
+            const record = window.state.attendances.find(a => a.nisn === nisn && a.date === date);
+
+            if (!student && !record) return;
+
+            const nama = record ? record.nama : student.nama;
+            const kelas = record ? record.kelas : student.kelas;
+
+            document.getElementById('statusModalNisn').value = nisn;
+            document.getElementById('statusModalDate').value = date;
+            document.getElementById('statusModalNama').innerText = nama;
+            document.getElementById('statusModalKelas').innerText = kelas;
+            document.getElementById('statusModalTanggal').innerText = date;
+            document.getElementById('statusModalSelect').value = record ? record.status : 'Hadir';
+
+            document.getElementById('statusModal').classList.remove('hidden');
+        }
+
+        function closeStatusModal() {
+            document.getElementById('statusModal').classList.add('hidden');
+        }
+
+        function saveAttendanceStatusForm(e) {
+            e.preventDefault();
+            const nisn = document.getElementById('statusModalNisn').value;
+            const date = document.getElementById('statusModalDate').value;
+            const newStatus = document.getElementById('statusModalSelect').value;
+
+            const student = window.state.students.find(s => s.nisn === nisn);
+            const existingRecord = window.state.attendances.find(a => a.nisn === nisn && a.date === date);
+
+            const record = {
+                id: `${nisn}_${date}`,
+                nisn: nisn,
+                nama: existingRecord ? existingRecord.nama : (student ? student.nama : '--'),
+                kelas: existingRecord ? existingRecord.kelas : (student ? student.kelas : '--'),
+                date: date,
+                time: existingRecord ? existingRecord.time : getTimeFormatted(),
+                status: newStatus
+            };
+
+            if (window.dbMethods) {
+                window.dbMethods.recordAttendance(record);
+            }
+
+            closeStatusModal();
+            showCustomAlert("Berhasil", `Status kehadiran ${record.nama} diperbarui menjadi '${newStatus}'.`);
+            refreshAllUI();
+        }
+
+        function openAddStudentModal() {
+            document.getElementById('studentModalTitle').innerText = "Tambah Murid Baru";
+            document.getElementById('editStudentId').value = "";
+            document.getElementById('modalNisn').value = "";
+            document.getElementById('modalNama').value = "";
+            document.getElementById('modalKelas').value = "";
+            document.getElementById('modalTahun').value = "2025/2026";
+            document.getElementById('modalNisn').readOnly = false;
+            document.getElementById('modalFotoPreview').src = "https://placehold.co/200x300/e2e8f0/64748b?text=Pas+Foto+2x3";
+            window.state.tempStudentPhoto = null;
+
+            document.getElementById('studentModal').classList.remove('hidden');
+        }
+
+        function editStudent(nisn) {
+            const student = window.state.students.find(s => s.nisn === nisn);
+            if (!student) return;
+
+            document.getElementById('studentModalTitle').innerText = "Edit Data Murid";
+            document.getElementById('editStudentId').value = student.nisn;
+            document.getElementById('modalNisn').value = student.nisn;
+            document.getElementById('modalNisn').readOnly = true;
+            document.getElementById('modalNama').value = student.nama;
+            document.getElementById('modalKelas').value = student.kelas;
+            document.getElementById('modalTahun').value = student.tahun || "2025/2026";
+            document.getElementById('modalFotoPreview').src = student.foto || "https://placehold.co/200x300/e2e8f0/64748b?text=Pas+Foto+2x3";
+            window.state.tempStudentPhoto = student.foto || null;
+
+            document.getElementById('studentModal').classList.remove('hidden');
+        }
+
+        function closeStudentModal() {
+            document.getElementById('studentModal').classList.add('hidden');
+        }
+
+        function handleStudentPhotoUpload(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (evt) => {
+                window.state.tempStudentPhoto = evt.target.result;
+                document.getElementById('modalFotoPreview').src = evt.target.result;
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function saveStudentForm(e) {
+            e.preventDefault();
+            const nisn = document.getElementById('modalNisn').value.trim();
+            const nama = document.getElementById('modalNama').value.trim();
+            const kelas = document.getElementById('modalKelas').value.trim();
+            const tahun = document.getElementById('modalTahun').value.trim();
+
+            if (!nisn || !nama || !kelas) {
+                showCustomAlert("Peringatan", "Mohon isi semua field wajib (*)");
+                return;
+            }
+
+            const student = {
+                id: nisn,
+                nisn: nisn,
+                nama: nama,
+                kelas: kelas,
+                tahun: tahun,
+                foto: window.state.tempStudentPhoto || null
+            };
+
+            if (window.dbMethods) {
+                window.dbMethods.saveStudent(student);
+            }
+
+            closeStudentModal();
+            showCustomAlert("Berhasil", "Data murid berhasil disimpan.");
+            refreshAllUI();
+        }
+
+        function deleteStudentConfirm(nisn) {
+            showCustomAlert("Konfirmasi Hapus", `Apakah Anda yakin ingin menghapus data murid dengan NISN ${nisn}?`, true, () => {
+                if (window.dbMethods) window.dbMethods.deleteStudent(nisn);
+                refreshAllUI();
+            });
+        }
+
+        function handleLogoUpload(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (evt) => {
+                window.state.customLogo = evt.target.result;
+                document.getElementById('headerLogo').src = evt.target.result;
+                renderCardPreviews();
+            };
+            reader.readAsDataURL(file);
+        }
+
+        function toggleSelectAllCards(checked) {
+            const classFilter = document.getElementById('cardClassFilter').value;
+            const students = window.state.students.filter(s => classFilter === 'ALL' || s.kelas === classFilter);
+
+            if (checked) {
+                students.forEach(s => window.state.selectedCardNisns.add(s.nisn));
+            } else {
+                window.state.selectedCardNisns.clear();
+            }
+            renderCardPreviews();
+        }
+
+        function renderCardPreviews() {
+            if (!window.state || !window.state.students) return;
+
+            const classFilter = document.getElementById('cardClassFilter').value;
+            const codeType = document.getElementById('codeFormatType').value;
+            const logoUrl = window.state.customLogo || window.DEFAULT_LOGO_179;
+
+            const filteredStudents = window.state.students.filter(s => classFilter === 'ALL' || s.kelas === classFilter);
+
+            // Initialize selections if empty
+            if (window.state.selectedCardNisns.size === 0 && filteredStudents.length > 0) {
+                filteredStudents.forEach(s => window.state.selectedCardNisns.add(s.nisn));
+            }
+
+            const grid = document.getElementById('cardPreviewGrid');
+            if (filteredStudents.length === 0) {
+                grid.innerHTML = `<div class="col-span-full py-10 text-center text-slate-400">Tidak ada kartu murid untuk ditampilkan.</div>`;
+                return;
+            }
+
+            grid.innerHTML = filteredStudents.map((s, idx) => {
+                const isChecked = window.state.selectedCardNisns.has(s.nisn) ? 'checked' : '';
+                return `
+                    <div class="flex flex-col items-center gap-2">
+                        <label class="text-xs font-semibold text-slate-600 flex items-center gap-1 cursor-pointer">
+                            <input type="checkbox" onchange="toggleCardSelect('${s.nisn}', this.checked)" ${isChecked}> Cetak Kartu Ini
+                        </label>
+                        <div class="id-card p-2 border-2 border-blue-600 rounded-lg bg-gradient-to-b from-blue-50/50 via-white to-sky-50 shadow-md relative flex flex-col justify-between">
+                            <!-- Card Header -->
+                            <div class="flex items-center gap-1.5 border-b border-blue-600/30 pb-1">
+                                <img src="${logoUrl}" class="w-6 h-6 object-contain shrink-0" onerror="this.src=window.DEFAULT_LOGO_179">
+                                <div class="text-left overflow-hidden">
+                                    <h5 class="font-extrabold text-[8px] text-blue-900 tracking-tight leading-tight uppercase">KARTU PELAJAR MURID</h5>
+                                    <p class="text-[6.5px] font-bold text-sky-700 leading-tight">SMP NEGERI 179 JAKARTA</p>
+                                </div>
+                            </div>
+
+                            <!-- Card Body -->
+                            <div class="flex gap-2 my-1 items-center flex-grow">
+                                <img src="${s.foto || 'https://placehold.co/200x300/e2e8f0/64748b?text=2x3'}" class="photo-2x3 shrink-0">
+                                <div class="text-[7.5px] space-y-0.5 text-slate-800 leading-tight overflow-hidden">
+                                    <div><span class="text-slate-400 block text-[6px]">NAMA:</span> <strong class="block truncate font-bold text-blue-950">${s.nama}</strong></div>
+                                    <div><span class="text-slate-400 block text-[6px]">NISN / ID:</span> <strong class="font-bold">${s.nisn}</strong></div>
+                                    <div><span class="text-slate-400 block text-[6px]">KELAS:</span> <strong class="font-bold">${s.kelas}</strong></div>
+                                    <div><span class="text-slate-400 block text-[6px]">THN AJARAN:</span> <span>${s.tahun || '2025/2026'}</span></div>
+                                </div>
+                            </div>
+
+                            <!-- Card Footer Code Area -->
+                            <div class="border-t border-blue-600/20 pt-1 flex flex-col items-center justify-center min-h-[36px]">
+                                ${codeType === 'QR' 
+                                    ? `<div id="preview-qr-${idx}" class="p-0.5 bg-white rounded"></div>`
+                                    : `<svg id="preview-bc-${idx}" class="w-full max-h-8"></svg>`
+                                }
+                            </div>
+                        </div>
+                    </div>
+                `;
+            }).join('');
+
+            // Generate Barcodes or QRs after DOM update
+            filteredStudents.forEach((s, idx) => {
+                if (codeType === 'QR') {
+                    const el = document.getElementById(`preview-qr-${idx}`);
+                    if (el) {
+                        el.innerHTML = '';
+                        new QRCode(el, { text: s.nisn, width: 34, height: 34, correctLevel: QRCode.CorrectLevel.M });
+                    }
+                } else {
+                    const el = document.getElementById(`preview-bc-${idx}`);
+                    if (el) {
+                        try {
+                            JsBarcode(el, s.nisn, { format: "CODE128", height: 20, displayValue: true, fontSize: 8, margin: 1 });
+                        } catch (e) {}
+                    }
+                }
+            });
+        }
+
+        function toggleCardSelect(nisn, isChecked) {
+            if (isChecked) window.state.selectedCardNisns.add(nisn);
+            else window.state.selectedCardNisns.delete(nisn);
+        }
+
+        function triggerPrintProcess() {
+            const classFilter = document.getElementById('cardClassFilter').value;
+            const codeType = document.getElementById('codeFormatType').value;
+            const logoUrl = window.state.customLogo || window.DEFAULT_LOGO_179;
+
+            const printableStudents = window.state.students.filter(s => {
+                const matchClass = classFilter === 'ALL' || s.kelas === classFilter;
+                return matchClass && window.state.selectedCardNisns.has(s.nisn);
+            });
+
+            if (printableStudents.length === 0) {
+                showCustomAlert("Peringatan", "Pilih setidaknya 1 kartu murid untuk dicetak.");
+                return;
+            }
+
+            const printContainer = document.getElementById('printableCardsContainer');
+            printContainer.innerHTML = printableStudents.map((s, idx) => `
+                <div class="id-card p-2 border border-blue-600 rounded-lg bg-gradient-to-b from-blue-50/50 via-white to-sky-50 shadow-none relative flex flex-col justify-between page-break">
+                    <!-- Card Header -->
+                    <div class="flex items-center gap-1.5 border-b border-blue-600/30 pb-1">
+                        <img src="${logoUrl}" class="w-6 h-6 object-contain shrink-0">
+                        <div class="text-left overflow-hidden">
+                            <h5 class="font-extrabold text-[8px] text-blue-900 tracking-tight leading-tight uppercase">KARTU PELAJAR MURID</h5>
+                            <p class="text-[6.5px] font-bold text-sky-700 leading-tight">SMP NEGERI 179 JAKARTA</p>
+                        </div>
+                    </div>
+
+                    <!-- Card Body -->
+                    <div class="flex gap-2 my-1 items-center flex-grow">
+                        <img src="${s.foto || 'https://placehold.co/200x300/e2e8f0/64748b?text=2x3'}" class="photo-2x3 shrink-0">
+                        <div class="text-[7.5px] space-y-0.5 text-slate-800 leading-tight overflow-hidden">
+                            <div><span class="text-slate-400 block text-[6px]">NAMA:</span> <strong class="block truncate font-bold text-blue-950">${s.nama}</strong></div>
+                            <div><span class="text-slate-400 block text-[6px]">NISN / ID:</span> <strong class="font-bold">${s.nisn}</strong></div>
+                            <div><span class="text-slate-400 block text-[6px]">KELAS:</span> <strong class="font-bold">${s.kelas}</strong></div>
+                            <div><span class="text-slate-400 block text-[6px]">THN AJARAN:</span> <span>${s.tahun || '2025/2026'}</span></div>
+                        </div>
+                    </div>
+
+                    <!-- Card Footer Code Area -->
+                    <div class="border-t border-blue-600/20 pt-1 flex flex-col items-center justify-center min-h-[36px]">
+                        ${codeType === 'QR' 
+                            ? `<div id="print-qr-${idx}" class="p-0.5 bg-white rounded"></div>`
+                            : `<svg id="print-bc-${idx}" class="w-full max-h-8"></svg>`
+                        }
+                    </div>
+                </div>
+            `).join('');
+
+            // Render Barcode / QR Codes for print container
+            printableStudents.forEach((s, idx) => {
+                if (codeType === 'QR') {
+                    const el = document.getElementById(`print-qr-${idx}`);
+                    if (el) {
+                        el.innerHTML = '';
+                        new QRCode(el, { text: s.nisn, width: 34, height: 34, correctLevel: QRCode.CorrectLevel.M });
+                    }
+                } else {
+                    const el = document.getElementById(`print-bc-${idx}`);
+                    if (el) {
+                        try {
+                            JsBarcode(el, s.nisn, { format: "CODE128", height: 20, displayValue: true, fontSize: 8, margin: 1 });
+                        } catch (e) {}
+                    }
+                }
+            });
+
+            setTimeout(() => {
+                window.print();
+            }, 300);
+        }
+
+        function renderReportTable() {
+            if (!window.state || !window.state.attendances) return;
+
+            const startDate = document.getElementById('reportStartDate').value;
+            const endDate = document.getElementById('reportEndDate').value;
+            const classFilter = document.getElementById('reportClassFilter').value;
+            const statusFilter = document.getElementById('reportStatusFilter').value;
+
+            const filtered = window.state.attendances.filter(a => {
+                const matchDate = (!startDate || a.date >= startDate) && (!endDate || a.date <= endDate);
+                const matchClass = classFilter === 'ALL' || a.kelas === classFilter;
+                const matchStatus = statusFilter === 'ALL' || a.status === statusFilter;
+                return matchDate && matchClass && matchStatus;
+            }).sort((a, b) => b.date.localeCompare(a.date) || b.time.localeCompare(a.time));
+
+            const tbody = document.getElementById('reportTableBody');
+            if (filtered.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="7" class="text-center py-6 text-slate-400">Tidak ada riwayat presensi yang sesuai.</td></tr>`;
+                return;
+            }
+
+            tbody.innerHTML = filtered.map(a => `
+                <tr class="hover:bg-slate-50 transition">
+                    <td class="p-3 font-medium text-slate-700">${a.date}</td>
+                    <td class="p-3 text-slate-500">${a.time} WIB</td>
+                    <td class="p-3 font-semibold text-slate-700">${a.nisn}</td>
+                    <td class="p-3 font-bold text-slate-900">${a.nama}</td>
+                    <td class="p-3"><span class="px-2 py-0.5 bg-blue-50 text-blue-700 font-bold rounded">${a.kelas}</span></td>
+                    <td class="p-3">${getStatusBadge(a.status)}</td>
+                    <td class="p-3 text-center">
+                        <button onclick="openStatusModal('${a.nisn}', '${a.date}')" class="text-blue-600 hover:text-blue-800 text-xs font-semibold flex items-center justify-center gap-1 mx-auto">
+                            <i class="fa-solid fa-pen-to-square"></i> Ubah Status
+                        </button>
+                    </td>
+                </tr>
+            `).join('');
+        }
+
+        function exportAttendanceToExcel() {
+            const startDate = document.getElementById('reportStartDate').value;
+            const endDate = document.getElementById('reportEndDate').value;
+            const classFilter = document.getElementById('reportClassFilter').value;
+            const statusFilter = document.getElementById('reportStatusFilter').value;
+
+            const filtered = window.state.attendances.filter(a => {
+                const matchDate = (!startDate || a.date >= startDate) && (!endDate || a.date <= endDate);
+                const matchClass = classFilter === 'ALL' || a.kelas === classFilter;
+                const matchStatus = statusFilter === 'ALL' || a.status === statusFilter;
+                return matchDate && matchClass && matchStatus;
+            }).sort((a, b) => a.date.localeCompare(b.date) || a.time.localeCompare(b.time));
+
+            if (filtered.length === 0) {
+                showCustomAlert("Informasi", "Tidak ada data presensi yang sesuai filter untuk diexport.");
+                return;
+            }
+
+            const exportData = filtered.map((a, idx) => ({
+                "No": idx + 1,
+                "Tanggal": a.date,
+                "Waktu Absen": a.time + " WIB",
+                "NISN": a.nisn,
+                "Nama Murid": a.nama,
+                "Kelas": a.kelas,
+                "Status Kehadiran": a.status
+            }));
+
+            const worksheet = XLSX.utils.json_to_sheet(exportData);
+            worksheet['!cols'] = [
+                { wch: 6 }, { wch: 14 }, { wch: 14 }, { wch: 16 }, { wch: 30 }, { wch: 12 }, { wch: 18 }
+            ];
+
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Laporan Absensi");
+
+            XLSX.writeFile(workbook, `Laporan_Absensi_SMPN179_${getTodayFormatted()}.xlsx`);
+            showCustomAlert("Berhasil Export", `Laporan presensi (${filtered.length} rekaman) berhasil diunduh.`);
+        }
+
+        function openExcelImportModal() {
+            document.getElementById('excelModal').classList.remove('hidden');
+        }
+
+        function closeExcelModal() {
+            document.getElementById('excelModal').classList.add('hidden');
+        }
+
+        function downloadExcelTemplate() {
+            const templateData = [
+                { nisn: "0081234501", nama: "Ahmad Rizky Pratama", kelas: "VII-A", tahun_ajaran: "2025/2026" },
+                { nisn: "0081234502", nama: "Siti Nurhaliza", kelas: "VII-A", tahun_ajaran: "2025/2026" },
+                { nisn: "0081234503", nama: "Budi Santoso", kelas: "VII-B", tahun_ajaran: "2025/2026" },
+                { nisn: "0081234504", nama: "Dewi Lestari", kelas: "VIII-A", tahun_ajaran: "2025/2026" },
+                { nisn: "0081234505", nama: "Eko Prasetyo", kelas: "IX-C", tahun_ajaran: "2025/2026" }
+            ];
+
+            const worksheet = XLSX.utils.json_to_sheet(templateData);
+            worksheet['!cols'] = [
+                { wch: 18 }, { wch: 30 }, { wch: 12 }, { wch: 16 }
+            ];
+
+            const workbook = XLSX.utils.book_new();
+            XLSX.utils.book_append_sheet(workbook, worksheet, "Data Murid");
+
+            XLSX.writeFile(workbook, "Template_Import_Murid_SMPN179.xlsx");
+            showCustomAlert("Sukses Unduh", "Template Excel berhasil diunduh.");
+        }
+
+        function processExcelImport(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (evt) => {
+                try {
+                    const data = new Uint8Array(evt.target.result);
+                    const workbook = XLSX.read(data, { type: 'array' });
+                    const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+                    const jsonData = XLSX.utils.sheet_to_json(firstSheet);
+
+                    let importedCount = 0;
+                    jsonData.forEach(row => {
+                        const nisn = String(row.nisn || row.NISN || '').trim();
+                        const nama = String(row.nama || row.NAMA || '').trim();
+                        const kelas = String(row.kelas || row.KELAS || '').trim();
+                        const tahun = String(row.tahun_ajaran || row.TAHUN || '2025/2026').trim();
+
+                        if (nisn && nama && kelas) {
+                            const st = { nisn, id: nisn, nama, kelas, tahun, foto: null };
+                            if (window.dbMethods) window.dbMethods.saveStudent(st);
+                            importedCount++;
+                        }
+                    });
+
+                    closeExcelModal();
+                    showCustomAlert("Import Selesai", `Berhasil mengimpor ${importedCount} data murid ke database!`);
+                    refreshAllUI();
+                } catch (err) {
+                    showCustomAlert("Gagal Import", "File Excel/CSV tidak dapat dibaca.");
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        }
+
+        function backupDatabaseJSON() {
+            const dataToExport = {
+                school: "SMP NEGERI 179 JAKARTA",
+                exportDate: new Date().toISOString(),
+                students: window.state.students,
+                attendances: window.state.attendances
+            };
+
+            const jsonStr = JSON.stringify(dataToExport, null, 2);
+            const blob = new Blob([jsonStr], { type: "application/json" });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `Backup_Database_SMPN179_${getTodayFormatted()}.json`;
+            a.click();
+            URL.revokeObjectURL(url);
+        }
+
+        function restoreDatabaseJSON(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (evt) => {
+                try {
+                    const parsed = JSON.parse(evt.target.result);
+                    if (parsed.students && Array.isArray(parsed.students)) {
+                        parsed.students.forEach(st => {
+                            if (window.dbMethods) window.dbMethods.saveStudent(st);
+                        });
+                    }
+                    if (parsed.attendances && Array.isArray(parsed.attendances)) {
+                        parsed.attendances.forEach(att => {
+                            if (window.dbMethods) window.dbMethods.recordAttendance(att);
+                        });
+                    }
+                    showCustomAlert("Sukses Restore", "Database berhasil dipulihkan dari file backup JSON!");
+                    refreshAllUI();
+                } catch (err) {
+                    showCustomAlert("Gagal", "File JSON backup tidak valid.");
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        function confirmResetTodayAttendance() {
+            const today = getTodayFormatted();
+            showCustomAlert("Reset Absensi Hari Ini", `Apakah Anda yakin ingin menghapus seluruh presensi tanggal ${today}?`, true, () => {
+                if (window.dbMethods) window.dbMethods.clearTodayAttendances(today);
+                refreshAllUI();
+            });
+        }
+
+        function confirmResetAllAttendance() {
+            showCustomAlert("Reset Seluruh Riwayat", "PERINGATAN: Tindakan ini akan menghapus SELURUH riwayat absensi. Lanjutkan?", true, () => {
+                if (window.dbMethods) window.dbMethods.clearAllAttendances();
+                refreshAllUI();
+            });
+        }
+
+        function showCustomAlert(title, message, isConfirm = false, onConfirmFn = null) {
+            document.getElementById('customAlertTitle').innerText = title;
+            document.getElementById('customAlertMessage').innerText = message;
+            
+            const cancelBtn = document.getElementById('customAlertCancelBtn');
+            const confirmBtn = document.getElementById('customAlertConfirmBtn');
+
+            if (isConfirm) {
+                cancelBtn.classList.remove('hidden');
+                confirmBtn.onclick = () => {
+                    closeCustomAlert();
+                    if (onConfirmFn) onConfirmFn();
+                };
+            } else {
+                cancelBtn.classList.add('hidden');
+                confirmBtn.onclick = closeCustomAlert;
+            }
+
+            document.getElementById('customAlertModal').classList.remove('hidden');
+        }
+
+        function closeCustomAlert() {
+            document.getElementById('customAlertModal').classList.add('hidden');
+        }
+    </script>
+</body>
+</html>
