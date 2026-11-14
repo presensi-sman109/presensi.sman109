@@ -1,10 +1,5 @@
 import type { AdminAccount, SchoolSettings, Student } from '../types';
 
-export const BOOTSTRAPPED_SUPER_ADMINS = [
-  'presensi.sman109@gmail.com',
-  'sudiyantoro62@gmail.com',
-];
-
 export const INITIAL_ADMINS: AdminAccount[] = [
   {
     id: 'adm_sudiyantoro',

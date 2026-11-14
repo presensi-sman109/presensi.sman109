@@ -34,12 +34,11 @@ export const SettingsTab: React.FC = () => {
     students,
     attendances,
     settings,
+    activeAdmin,
     activeDate,
-    firebaseUser,
     isOffline,
     syncStatus,
     lastSyncedAt,
-    connectCloudSync,
     syncNowToFirestore,
     saveSettings,
     restoreBackup,
@@ -111,12 +110,10 @@ export const SettingsTab: React.FC = () => {
 
   const handleManualSync = async () => {
     setSyncBusy(true);
-    const res = firebaseUser?.emailVerified
-      ? await syncNowToFirestore()
-      : await connectCloudSync();
+    const res = await syncNowToFirestore();
     setSyncBusy(false);
     if (res.ok) {
-      setNotice('Data murid, pas foto, presensi, dan pengaturan berhasil disinkronkan dengan Cloud Firestore.');
+      setNotice('Data murid, pas foto, akun petugas, presensi, dan pengaturan berhasil disinkronkan dengan Cloud Firestore.');
     } else if (res.error) {
       setNotice(res.error);
     }
@@ -456,16 +453,18 @@ export const SettingsTab: React.FC = () => {
                 className={`px-2.5 py-0.5 rounded-md border text-[11px] font-semibold ${
                   isOffline
                     ? 'bg-amber-50 border-amber-200 text-amber-800'
-                    : firebaseUser?.emailVerified
-                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800'
-                    : 'bg-slate-100 border-slate-200 text-slate-700'
+                    : syncStatus === 'error'
+                    ? 'bg-rose-50 border-rose-200 text-rose-800'
+                    : 'bg-emerald-50 border-emerald-200 text-emerald-800'
                 }`}
               >
                 {isOffline
                   ? 'Offline'
-                  : firebaseUser?.emailVerified
-                  ? 'Tersinkron Realtime'
-                  : 'Mode Lokal'}
+                  : syncStatus === 'syncing' || syncBusy
+                  ? 'Menyinkronkan...'
+                  : syncStatus === 'error'
+                  ? 'Gangguan Sinkron'
+                  : 'Tersinkron Realtime'}
               </span>
             </div>
 
@@ -483,9 +482,9 @@ export const SettingsTab: React.FC = () => {
                 </span>
               </div>
               <div className="flex items-center justify-between gap-2">
-                <span>Akun Cloud Google:</span>
+                <span>Petugas Aktif:</span>
                 <span className="font-mono font-semibold text-slate-900 truncate">
-                  {firebaseUser?.email || 'Belum Terhubung'}
+                  {activeAdmin ? `${activeAdmin.nama} (@${activeAdmin.username})` : '-'}
                 </span>
               </div>
               <div className="flex items-center justify-between gap-2">
@@ -510,28 +509,20 @@ export const SettingsTab: React.FC = () => {
               type="button"
               disabled={syncBusy || isOffline}
               onClick={() => void handleManualSync()}
-              className={`w-full py-2.5 px-4 rounded-xl font-semibold inline-flex items-center justify-center gap-2 disabled:opacity-50 ${
-                firebaseUser?.emailVerified
-                  ? 'bg-emerald-600 hover:bg-emerald-700 text-white'
-                  : 'bg-blue-700 hover:bg-blue-800 text-white'
-              }`}
+              className="w-full py-2.5 px-4 rounded-xl font-semibold inline-flex items-center justify-center gap-2 disabled:opacity-50 bg-emerald-600 hover:bg-emerald-700 text-white"
             >
               {syncBusy || syncStatus === 'syncing' ? (
                 <RefreshCw className="w-4 h-4 animate-spin" />
-              ) : firebaseUser?.emailVerified ? (
-                <CheckCircle2 className="w-4 h-4" />
               ) : (
-                <Cloud className="w-4 h-4" />
+                <CheckCircle2 className="w-4 h-4" />
               )}
-              {firebaseUser?.emailVerified
-                ? 'Sinkronkan & Gabungkan Data Sekarang'
-                : 'Hubungkan Google & Sinkronkan ke Firestore'}
+              Sinkronkan & Gabungkan Data Sekarang
             </button>
 
             <p className="text-[11px] text-slate-500 leading-relaxed">
               Aplikasi siap dipublish gratis melalui Google AI Studio / Cloud Run (Free Tier)
-              dengan database Firestore paket gratis (Spark). Klik tombol di atas untuk memastikan
-              seluruh data lokal & foto murid sudah tersimpan di Cloud sebelum dipublikasikan.
+              dengan database Firestore paket gratis (Spark). Seluruh akun petugas, data murid,
+              pas foto, dan presensi otomatis tersinkronisasi ke Firebase.
             </p>
           </div>
 

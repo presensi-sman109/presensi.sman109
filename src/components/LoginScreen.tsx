@@ -6,6 +6,7 @@ import {
   EyeOff,
   KeyRound,
   Lock,
+  RefreshCw,
   ShieldCheck,
   UserCheck,
   WifiOff,
@@ -21,9 +22,10 @@ export const LoginScreen: React.FC = () => {
     settings,
     cloudConnected,
     isOffline,
+    syncStatus,
     loginWithCredentials,
     loginWithSelectedAdmin,
-    loginWithGoogle,
+    syncNowToFirestore,
   } = useAppData();
 
   const [mode, setMode] = useState<'form' | 'quick'>('quick');
@@ -37,7 +39,7 @@ export const LoginScreen: React.FC = () => {
   const pinInputRef = useRef<HTMLInputElement | null>(null);
 
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [googleLoading, setGoogleLoading] = useState(false);
+  const [syncBusy, setSyncBusy] = useState(false);
 
   useEffect(() => {
     if (selectedProfile && pinInputRef.current) {
@@ -66,13 +68,13 @@ export const LoginScreen: React.FC = () => {
     }
   };
 
-  const handleGoogleSignIn = async () => {
+  const handleSyncStaffAccounts = async () => {
     setErrorMsg(null);
-    setGoogleLoading(true);
-    const res = await loginWithGoogle();
-    setGoogleLoading(false);
-    if (!res.ok) {
-      setErrorMsg(res.error || 'Gagal otentikasi dengan Akun Google.');
+    setSyncBusy(true);
+    const res = await syncNowToFirestore();
+    setSyncBusy(false);
+    if (!res.ok && res.error) {
+      setErrorMsg(res.error);
     }
   };
 
@@ -102,8 +104,9 @@ export const LoginScreen: React.FC = () => {
                 Gerbang Otentikasi Presensi & Kartu Pelajar
               </h2>
               <p className="text-sm text-slate-300 leading-relaxed">
-                Masuk menggunakan akun petugas terdaftar atau Akun Google terverifikasi untuk
-                mengakses pemindai presensi, manajemen data murid, cetak kartu CR80, dan laporan A4.
+                Masuk menggunakan akun petugas terdaftar yang tersinkron real-time dengan Firebase
+                Cloud Firestore untuk mengakses pemindai presensi, manajemen data murid, cetak
+                kartu CR80, dan laporan A4.
               </p>
             </div>
           </div>
@@ -129,15 +132,25 @@ export const LoginScreen: React.FC = () => {
                     <WifiOff className="w-3.5 h-3.5 text-amber-400" />
                     Cache Offline Aktif
                   </>
-                ) : cloudConnected ? (
+                ) : syncStatus === 'syncing' || syncBusy ? (
+                  <>
+                    <RefreshCw className="w-3.5 h-3.5 text-sky-400 animate-spin" />
+                    Menyinkronkan Akun...
+                  </>
+                ) : syncStatus === 'error' ? (
+                  <>
+                    <Lock className="w-3.5 h-3.5 text-rose-400" />
+                    Gangguan Sinkron
+                  </>
+                ) : cloudConnected || syncStatus === 'synced' ? (
                   <>
                     <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
-                    Terhubung ke Cloud
+                    Tersinkron Realtime
                   </>
                 ) : (
                   <>
                     <CheckCircle2 className="w-3.5 h-3.5 text-sky-400" />
-                    Siap Sinkronisasi
+                    Terhubung ke Firebase
                   </>
                 )}
               </span>
@@ -333,7 +346,7 @@ export const LoginScreen: React.FC = () => {
                   type="text"
                   value={identifier}
                   onChange={(e) => setIdentifier(e.target.value)}
-                  placeholder="mis. sudiyantoro atau sudiyantoro62@gmail.com"
+                  placeholder="mis. sudiyantoro atau presensi109"
                   className="w-full px-3.5 py-2.5 text-sm border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-blue-600"
                 />
               </div>
@@ -375,36 +388,20 @@ export const LoginScreen: React.FC = () => {
             </form>
           )}
 
-          {/* GOOGLE FIREBASE AUTHENTICATION DIVIDER & BUTTON */}
-          <div className="mt-6 pt-5 border-t border-slate-200 space-y-3">
-            <div className="text-center text-xs text-slate-500">
-              Atau sinkronisasi langsung Cloud Firestore via Google
-            </div>
+          {/* FIREBASE STAFF SYNC STATUS BAR */}
+          <div className="mt-6 pt-4 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 text-xs text-slate-500">
+            <span>
+              Daftar akun petugas ({activeStaffList.length} aktif) tersinkron otomatis dengan
+              Firebase.
+            </span>
             <button
               type="button"
-              disabled={googleLoading}
-              onClick={handleGoogleSignIn}
-              className="w-full py-2.5 px-4 bg-white hover:bg-slate-50 border border-slate-300 text-slate-800 font-semibold text-sm rounded-xl transition-colors flex items-center justify-center gap-2.5 disabled:opacity-60"
+              disabled={syncBusy || isOffline}
+              onClick={() => void handleSyncStaffAccounts()}
+              className="inline-flex items-center gap-1.5 font-semibold text-blue-700 hover:text-blue-800 disabled:opacity-50"
             >
-              <svg className="w-4 h-4" viewBox="0 0 24 24" aria-hidden="true">
-                <path
-                  fill="#4285F4"
-                  d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.82-2.4 3.68v3.05h3.88c2.27-2.09 3.665-5.17 3.665-9.17Z"
-                />
-                <path
-                  fill="#34A853"
-                  d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.11-6.72-4.96H1.29v3.14C3.26 21.3 7.31 24 12 24Z"
-                />
-                <path
-                  fill="#FBBC05"
-                  d="M5.28 14.24c-.24-.72-.38-1.49-.38-2.24s.14-1.52.38-2.24V6.62H1.29C.47 8.24 0 10.06 0 12s.47 3.76 1.29 5.38l3.99-3.14Z"
-                />
-                <path
-                  fill="#EA4335"
-                  d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.31 0 3.26 2.7 1.29 6.62l3.99 3.14c.95-2.85 3.6-4.96 6.72-4.96Z"
-                />
-              </svg>
-              {googleLoading ? 'Menghubungkan Akun Google...' : 'Login dengan Akun Google'}
+              <RefreshCw className={`w-3.5 h-3.5 ${syncBusy ? 'animate-spin' : ''}`} />
+              {syncBusy ? 'Menyinkronkan...' : 'Sinkronkan Akun'}
             </button>
           </div>
         </div>

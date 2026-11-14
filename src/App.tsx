@@ -67,12 +67,10 @@ const MainShell: React.FC = () => {
     activeAdmin,
     settings,
     activeDate,
-    firebaseUser,
     isOffline,
     syncStatus,
     lastSyncedAt,
     syncError,
-    connectCloudSync,
     syncNowToFirestore,
     clearSyncError,
     saveSettings,
@@ -104,9 +102,7 @@ const MainShell: React.FC = () => {
   const handleCloudAction = async () => {
     setConnectBusy(true);
     setConnectFeedback(null);
-    const res = firebaseUser?.emailVerified
-      ? await syncNowToFirestore()
-      : await connectCloudSync();
+    const res = await syncNowToFirestore();
     setConnectBusy(false);
     if (!res.ok && res.error) {
       setConnectFeedback(res.error);
@@ -140,9 +136,7 @@ const MainShell: React.FC = () => {
                       ? 'text-amber-700 font-medium'
                       : syncStatus === 'error'
                       ? 'text-rose-700 font-medium'
-                      : firebaseUser?.emailVerified
-                      ? 'text-emerald-700 font-medium'
-                      : 'text-slate-500'
+                      : 'text-emerald-700 font-medium'
                   }
                 >
                   {isOffline
@@ -151,9 +145,7 @@ const MainShell: React.FC = () => {
                     ? 'Menyinkronkan Firestore...'
                     : syncStatus === 'error'
                     ? 'Sinkronisasi Terganggu'
-                    : firebaseUser?.emailVerified
-                    ? `Firestore Realtime${syncTimeLabel ? ` (${syncTimeLabel})` : ''}`
-                    : 'Mode Lokal'}
+                    : `Firestore Realtime${syncTimeLabel ? ` (${syncTimeLabel})` : ''}`}
                 </span>
               </div>
             </div>
@@ -165,15 +157,11 @@ const MainShell: React.FC = () => {
               type="button"
               disabled={connectBusy || isOffline}
               onClick={() => void handleCloudAction()}
-              title={
-                firebaseUser?.emailVerified
-                  ? 'Sinkronkan ulang data dengan Cloud Firestore sekarang'
-                  : 'Hubungkan akun Google untuk sinkronisasi real-time Cloud Firestore'
-              }
+              title="Sinkronkan ulang data dengan Cloud Firestore sekarang"
               className={`px-3 py-2 rounded-xl border text-xs font-semibold inline-flex items-center gap-1.5 transition-colors disabled:opacity-50 ${
-                firebaseUser?.emailVerified
-                  ? 'bg-emerald-50 border-emerald-200 text-emerald-800 hover:bg-emerald-100'
-                  : 'bg-blue-50 border-blue-200 text-blue-800 hover:bg-blue-100'
+                isOffline
+                  ? 'bg-amber-50 border-amber-200 text-amber-800'
+                  : 'bg-emerald-50 border-emerald-200 text-emerald-800 hover:bg-emerald-100'
               }`}
             >
               {isOffline ? (
@@ -183,13 +171,7 @@ const MainShell: React.FC = () => {
               ) : (
                 <Cloud className="w-4 h-4" />
               )}
-              <span className="hidden md:inline">
-                {isOffline
-                  ? 'Offline'
-                  : firebaseUser?.emailVerified
-                  ? 'Sinkronkan'
-                  : 'Hubungkan Cloud'}
-              </span>
+              <span className="hidden md:inline">{isOffline ? 'Offline' : 'Sinkronkan'}</span>
             </button>
 
             <button

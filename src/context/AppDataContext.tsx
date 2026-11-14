@@ -1,5 +1,4 @@
 import React, { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react';
-import { onAuthStateChanged, signInWithPopup, signOut, type User } from 'firebase/auth';
 import {
   collection,
   deleteDoc,
@@ -11,15 +10,12 @@ import {
   writeBatch,
 } from 'firebase/firestore';
 import {
-  auth,
   db,
-  googleProvider,
   handleFirestoreError,
   OperationType,
   testFirestoreConnection,
 } from '../lib/firebase';
 import {
-  BOOTSTRAPPED_SUPER_ADMINS,
   DEFAULT_SCHOOL_SETTINGS,
   INITIAL_ADMINS,
   INITIAL_STUDENTS,
@@ -36,7 +32,7 @@ import type {
   TtsVoice,
 } from '../types';
 
-export type CloudSyncStatus = 'synced' | 'syncing' | 'local_only' | 'offline' | 'error';
+export type CloudSyncStatus = 'synced' | 'syncing' | 'offline' | 'error';
 
 const LS_KEYS = {
   STUDENTS: 'sman109_students_v1',
@@ -45,6 +41,7 @@ const LS_KEYS = {
   LOGS: 'sman109_admin_logs_v1',
   SETTINGS: 'sman109_school_settings_v1',
   SESSION: 'sman109_active_session_v1',
+  LAST_SYNC: 'sman109_last_sync_ts_v1',
 };
 
 const VALID_STATUSES: AttendanceStatus[] = ['Hadir', 'Sakit', 'Ijin', 'Alpa'];
@@ -83,14 +80,6 @@ function sanitizeStudentId(raw: string): string {
     .replace(/[^a-zA-Z0-9_-]/g, '');
   if (cleaned.length >= 3) return cleaned.slice(0, 32);
   return cleaned.padEnd(3, '0').slice(0, 32);
-}
-
-export function toEmailRoleKey(email: string): string {
-  return String(email || '')
-    .trim()
-    .toLowerCase()
-    .replace(/[^a-z0-9]/g, '_')
-    .slice(0, 128);
 }
 
 function safeTimestamp(ts?: string): string {
@@ -211,31 +200,22 @@ function sanitizeAdminLogForCloud(l: AdminLog): AdminLog {
   };
 }
 
-function buildEmailRoleDoc(admin: AdminAccount) {
-  const cleanEmail = admin.email.trim().toLowerCase();
-  const key = toEmailRoleKey(cleanEmail);
-  return {
-    id: key,
-    email: cleanEmail.slice(0, 120),
-    adminId: sanitizeId(admin.id, 'adm'),
-    role: admin.role,
-    active: Boolean(admin.active),
-    updatedAt: safeTimestamp(admin.updatedAt),
-  };
-}
-
 function formatReadableSyncError(err: unknown): string {
   const raw = err instanceof Error ? err.message : String(err);
   if (raw.includes('Quota exceeded')) {
     return 'Kuota harian gratis Firestore terlampaui. Data tetap aman tersimpan di cache lokal dan akan tersinkron setelah kuota direset.';
   }
   if (raw.includes('permission-denied') || raw.includes('Missing or insufficient permissions')) {
-    return 'Izin akses Firestore ditolak untuk akun ini. Pastikan email Google Anda terdaftar sebagai Admin aktif.';
+    return 'Izin akses Firestore ditolak oleh aturan keamanan database. Periksa firestore.rules.';
   }
   if (raw.includes('client is offline') || raw.includes('unavailable')) {
     return 'Koneksi ke server Firestore terputus. Perubahan disimpan di cache lokal dan otomatis disinkronkan saat online.';
   }
   return `Sinkronisasi Cloud terganggu: ${raw.slice(0, 160)}`;
+}
+
+function isOnlineNow(): boolean {
+  return typeof navigator === 'undefined' ? true : navigator.onLine;
 }
 
 interface AppDataContextValue {
@@ -245,7 +225,6 @@ interface AppDataContextValue {
   adminLogs: AdminLog[];
   settings: SchoolSettings;
   activeAdmin: AdminAccount | null;
-  firebaseUser: User | null;
   cloudConnected: boolean;
   isOffline: boolean;
   syncStatus: CloudSyncStatus;
@@ -255,8 +234,6 @@ interface AppDataContextValue {
   setActiveDate: (date: string) => void;
   loginWithCredentials: (identifier: string, password: string) => { ok: boolean; error?: string };
   loginWithSelectedAdmin: (adminId: string, password: string) => { ok: boolean; error?: string };
-  loginWithGoogle: () => Promise<{ ok: boolean; error?: string }>;
-  connectCloudSync: () => Promise<{ ok: boolean; error?: string }>;
   syncNowToFirestore: () => Promise<{ ok: boolean; error?: string }>;
   clearSyncError: () => void;
   logout: () => Promise<void>;
@@ -334,15 +311,16 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   });
 
-  const [firebaseUser, setFirebaseUser] = useState<User | null>(null);
   const [cloudConnected, setCloudConnected] = useState(false);
   const [isOffline, setIsOffline] = useState(
     typeof navigator !== 'undefined' ? !navigator.onLine : false
   );
   const [syncStatus, setSyncStatus] = useState<CloudSyncStatus>(() =>
-    typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'local_only'
+    typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'syncing'
   );
-  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(null);
+  const [lastSyncedAt, setLastSyncedAt] = useState<string | null>(() =>
+    readStorage<string | null>(LS_KEYS.LAST_SYNC, null)
+  );
   const [syncError, setSyncError] = useState<string | null>(null);
   const [activeDate, setActiveDate] = useState<string>(() => getTodayWib());
 
@@ -353,6 +331,7 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const adminLogsRef = useRef(adminLogs);
   const settingsRef = useRef(settings);
   const activeAdminRef = useRef(activeAdmin);
+  const lastSyncedAtRef = useRef(lastSyncedAt);
   const isSyncInFlightRef = useRef(false);
 
   useEffect(() => {
@@ -373,6 +352,19 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   useEffect(() => {
     activeAdminRef.current = activeAdmin;
   }, [activeAdmin]);
+  useEffect(() => {
+    lastSyncedAtRef.current = lastSyncedAt;
+    if (lastSyncedAt) {
+      writeStorage(LS_KEYS.LAST_SYNC, lastSyncedAt);
+    }
+  }, [lastSyncedAt]);
+
+  const markSyncedNow = useCallback(() => {
+    const now = new Date().toISOString();
+    setCloudConnected(true);
+    setSyncStatus('synced');
+    setLastSyncedAt(now);
+  }, []);
 
   const captureFirestoreError = useCallback(
     (err: unknown, operationType: OperationType, path: string | null) => {
@@ -390,28 +382,18 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
   const clearSyncError = useCallback(() => {
     setSyncError(null);
     if (!isOffline) {
-      setSyncStatus(auth.currentUser?.emailVerified ? 'synced' : 'local_only');
+      setSyncStatus('synced');
     }
   }, [isOffline]);
 
-  const resolveIsSuperAdmin = useCallback((user: User | null): boolean => {
-    const email = (user?.email || '').toLowerCase();
-    if (BOOTSTRAPPED_SUPER_ADMINS.includes(email)) return true;
-    if (activeAdminRef.current?.role === 'super_admin') return true;
-    const matched = adminsRef.current.find((a) => a.email.toLowerCase() === email);
-    return matched?.role === 'super_admin' && matched.active;
-  }, []);
-
-  // Bidirectional merge & push local changes to Cloud Firestore
+  // Bidirectional merge & push local changes to Cloud Firestore (no Google Auth required)
   const syncNowToFirestore = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
-    const user = auth.currentUser;
-    if (!user || !user.emailVerified) {
-      setSyncStatus(isOffline ? 'offline' : 'local_only');
-      return { ok: false, error: 'Akun Google Firebase belum terhubung.' };
-    }
-    if (typeof navigator !== 'undefined' && !navigator.onLine) {
+    if (!isOnlineNow()) {
       setSyncStatus('offline');
-      return { ok: false, error: 'Perangkat sedang offline. Sinkronisasi akan berjalan otomatis saat online.' };
+      return {
+        ok: false,
+        error: 'Perangkat sedang offline. Sinkronisasi akan berjalan otomatis saat online.',
+      };
     }
     if (isSyncInFlightRef.current) {
       return { ok: true };
@@ -422,10 +404,47 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setSyncError(null);
 
     try {
-      const canManageAdmins = resolveIsSuperAdmin(user);
       const pendingOps: Array<{ path: string; data: Record<string, unknown> }> = [];
+      const prevSyncTs = lastSyncedAtRef.current || '';
 
-      // 1. Students bidirectional merge (Last-Write-Wins on updatedAt)
+      // 1. Admins (Staff accounts) bidirectional merge — always synced so LoginScreen stays fresh
+      const remoteAdminMap = new Map<string, AdminAccount>();
+      try {
+        const admSnap = await getDocs(collection(db, 'admins'));
+        admSnap.docs.forEach((d) => {
+          const adm = sanitizeAdminForCloud(d.data() as AdminAccount);
+          remoteAdminMap.set(adm.id, adm);
+        });
+      } catch (err) {
+        captureFirestoreError(err, OperationType.LIST, 'admins');
+      }
+
+      const mergedAdminMap = new Map<string, AdminAccount>(remoteAdminMap);
+      const isAdminsBootEmpty = remoteAdminMap.size === 0;
+      adminsRef.current.forEach((localRaw) => {
+        const local = sanitizeAdminForCloud(localRaw);
+        const remote = remoteAdminMap.get(local.id);
+        const shouldPush = isAdminsBootEmpty
+          ? true
+          : remote
+            ? local.updatedAt > (remote.updatedAt || '')
+            : Boolean(prevSyncTs && local.updatedAt > prevSyncTs);
+        if (shouldPush) {
+          mergedAdminMap.set(local.id, local);
+          pendingOps.push({
+            path: `admins/${local.id}`,
+            data: local as unknown as Record<string, unknown>,
+          });
+        }
+      });
+
+      const mergedAdmins = Array.from(mergedAdminMap.values());
+      if (mergedAdmins.length > 0) {
+        setAdmins(mergedAdmins);
+        writeStorage(LS_KEYS.ADMINS, mergedAdmins);
+      }
+
+      // 2. Students bidirectional merge (Last-Write-Wins on updatedAt)
       const remoteStudentMap = new Map<string, Student>();
       try {
         const snap = await getDocs(collection(db, 'students'));
@@ -434,14 +453,20 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
           remoteStudentMap.set(st.nis || d.id, st);
         });
       } catch (err) {
-        captureFirestoreError(err, OperationType.GET, 'students');
+        captureFirestoreError(err, OperationType.LIST, 'students');
       }
 
       const mergedStudentMap = new Map<string, Student>(remoteStudentMap);
+      const isStudentsBootEmpty = remoteStudentMap.size === 0;
       studentsRef.current.forEach((localRaw) => {
         const local = sanitizeStudentForCloud(localRaw);
         const remote = remoteStudentMap.get(local.nis);
-        if (!remote || local.updatedAt > (remote.updatedAt || '')) {
+        const shouldPush = isStudentsBootEmpty
+          ? true
+          : remote
+            ? local.updatedAt > (remote.updatedAt || '')
+            : Boolean(prevSyncTs && local.updatedAt > prevSyncTs);
+        if (shouldPush) {
           mergedStudentMap.set(local.nis, local);
           pendingOps.push({
             path: `students/${local.nis}`,
@@ -456,7 +481,7 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         writeStorage(LS_KEYS.STUDENTS, mergedStudents);
       }
 
-      // 2. Attendances bidirectional merge
+      // 3. Attendances bidirectional merge
       const remoteAttMap = new Map<string, AttendanceRecord>();
       try {
         const snap = await getDocs(collection(db, 'attendances'));
@@ -465,14 +490,17 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
           remoteAttMap.set(att.id || d.id, att);
         });
       } catch (err) {
-        captureFirestoreError(err, OperationType.GET, 'attendances');
+        captureFirestoreError(err, OperationType.LIST, 'attendances');
       }
 
       const mergedAttMap = new Map<string, AttendanceRecord>(remoteAttMap);
       attendancesRef.current.forEach((localRaw) => {
         const local = sanitizeAttendanceForCloud(localRaw);
         const remote = remoteAttMap.get(local.id);
-        if (!remote || local.updatedAt > (remote.updatedAt || '')) {
+        const shouldPush = remote
+          ? local.updatedAt > (remote.updatedAt || '')
+          : !prevSyncTs || local.updatedAt > prevSyncTs;
+        if (shouldPush) {
           mergedAttMap.set(local.id, local);
           pendingOps.push({
             path: `attendances/${local.id}`,
@@ -485,21 +513,13 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setAttendances(mergedAttendances);
       writeStorage(LS_KEYS.ATTENDANCES, mergedAttendances);
 
-      // 3. School Settings bidirectional merge (only Admin TU & Super Admin can write)
-      const userEmail = (user.email || '').toLowerCase();
-      const matchedAdmin = adminsRef.current.find((a) => a.email.toLowerCase() === userEmail);
-      const effectiveRole =
-        BOOTSTRAPPED_SUPER_ADMINS.includes(userEmail)
-          ? 'super_admin'
-          : activeAdminRef.current?.role || matchedAdmin?.role || 'operator';
-      const canWriteAdminData = effectiveRole === 'super_admin' || effectiveRole === 'admin';
-
+      // 4. School Settings bidirectional merge
       try {
         const setSnap = await getDoc(doc(db, 'school_settings', 'main'));
         const localSettings = sanitizeSettingsForCloud(settingsRef.current);
         if (setSnap.exists()) {
           const remoteSettings = setSnap.data() as SchoolSettings;
-          if (localSettings.updatedAt > (remoteSettings.updatedAt || '') && canWriteAdminData) {
+          if (localSettings.updatedAt > (remoteSettings.updatedAt || '')) {
             pendingOps.push({
               path: 'school_settings/main',
               data: localSettings as unknown as Record<string, unknown>,
@@ -508,7 +528,7 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
             setSettings(remoteSettings);
             writeStorage(LS_KEYS.SETTINGS, remoteSettings);
           }
-        } else if (canWriteAdminData) {
+        } else {
           pendingOps.push({
             path: 'school_settings/main',
             data: localSettings as unknown as Record<string, unknown>,
@@ -518,7 +538,7 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         captureFirestoreError(err, OperationType.GET, 'school_settings/main');
       }
 
-      // 4. Admin Logs merge (push any unuploaded local logs)
+      // 5. Admin Logs merge (push any unuploaded local logs)
       try {
         const logSnap = await getDocs(collection(db, 'admin_logs'));
         const remoteLogMap = new Map<string, AdminLog>();
@@ -542,62 +562,7 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setAdminLogs(sortedLogs);
         writeStorage(LS_KEYS.LOGS, sortedLogs);
       } catch (err) {
-        captureFirestoreError(err, OperationType.GET, 'admin_logs');
-      }
-
-      // 5. Admins & AdminEmailRoles (Super Admin only)
-      if (canManageAdmins) {
-        try {
-          const admSnap = await getDocs(collection(db, 'admins'));
-          const remoteAdminMap = new Map<string, AdminAccount>();
-          admSnap.docs.forEach((d) => {
-            const adm = sanitizeAdminForCloud(d.data() as AdminAccount);
-            remoteAdminMap.set(adm.id, adm);
-          });
-
-          const mergedAdminMap = new Map<string, AdminAccount>(remoteAdminMap);
-          adminsRef.current.forEach((localRaw) => {
-            const local = sanitizeAdminForCloud(localRaw);
-            const remote = remoteAdminMap.get(local.id);
-            if (!remote || local.updatedAt > (remote.updatedAt || '')) {
-              mergedAdminMap.set(local.id, local);
-              pendingOps.push({
-                path: `admins/${local.id}`,
-                data: local as unknown as Record<string, unknown>,
-              });
-            }
-          });
-
-          const mergedAdmins = Array.from(mergedAdminMap.values());
-          setAdmins(mergedAdmins);
-          writeStorage(LS_KEYS.ADMINS, mergedAdmins);
-
-          // Ensure every admin email has an up-to-date RBAC role lookup document
-          const roleSnap = await getDocs(collection(db, 'admin_email_roles'));
-          const remoteRoleMap = new Map<string, { updatedAt?: string; role?: string; active?: boolean }>();
-          roleSnap.docs.forEach((d) => {
-            remoteRoleMap.set(d.id, d.data() as { updatedAt?: string; role?: string; active?: boolean });
-          });
-
-          mergedAdmins.forEach((adm) => {
-            const roleDoc = buildEmailRoleDoc(adm);
-            if (!roleDoc.id) return;
-            const existingRole = remoteRoleMap.get(roleDoc.id);
-            if (
-              !existingRole ||
-              existingRole.role !== roleDoc.role ||
-              existingRole.active !== roleDoc.active ||
-              roleDoc.updatedAt > (existingRole.updatedAt || '')
-            ) {
-              pendingOps.push({
-                path: `admin_email_roles/${roleDoc.id}`,
-                data: roleDoc as unknown as Record<string, unknown>,
-              });
-            }
-          });
-        } catch (err) {
-          captureFirestoreError(err, OperationType.GET, 'admins');
-        }
+        captureFirestoreError(err, OperationType.LIST, 'admin_logs');
       }
 
       // Commit all pending local-to-cloud writes in safe chunks of 400
@@ -613,9 +578,7 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         await batch.commit();
       }
 
-      setCloudConnected(true);
-      setSyncStatus('synced');
-      setLastSyncedAt(new Date().toISOString());
+      markSyncedNow();
       return { ok: true };
     } catch (err) {
       captureFirestoreError(err, OperationType.WRITE, 'sync_batch');
@@ -623,18 +586,14 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     } finally {
       isSyncInFlightRef.current = false;
     }
-  }, [captureFirestoreError, isOffline, resolveIsSuperAdmin]);
+  }, [captureFirestoreError, markSyncedNow]);
 
   // Network online/offline listeners + initial Firestore server check
   useEffect(() => {
-    testFirestoreConnection().then((ok) => setCloudConnected(ok));
+    void testFirestoreConnection().then((ok) => setCloudConnected(ok));
     const onOnline = () => {
       setIsOffline(false);
-      if (auth.currentUser?.emailVerified) {
-        void syncNowToFirestore();
-      } else {
-        setSyncStatus('local_only');
-      }
+      void syncNowToFirestore();
     };
     const onOffline = () => {
       setIsOffline(true);
@@ -647,17 +606,6 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       window.removeEventListener('offline', onOffline);
     };
   }, [syncNowToFirestore]);
-
-  // Auth listener
-  useEffect(() => {
-    const unsub = onAuthStateChanged(auth, (user) => {
-      setFirebaseUser(user);
-      if (!user) {
-        setSyncStatus(typeof navigator !== 'undefined' && !navigator.onLine ? 'offline' : 'local_only');
-      }
-    });
-    return () => unsub();
-  }, []);
 
   // Keep sessionStorage synced with activeAdmin
   useEffect(() => {
@@ -672,17 +620,65 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   }, [activeAdmin]);
 
-  // Real-time Firestore listeners when authenticated with Google Firebase Auth
+  // Real-time Firestore listeners (active on boot so staff accounts & data stay synchronized across devices)
   useEffect(() => {
-    if (!firebaseUser || !firebaseUser.emailVerified) return;
-
     let cancelled = false;
     const unsubs: Array<() => void> = [];
 
-    // Trigger bidirectional merge immediately on cloud connection
-    void syncNowToFirestore();
+    if (isOnlineNow()) {
+      void syncNowToFirestore();
+    }
 
-    // 1. Students listener
+    // 1. Admins (Staff Accounts) real-time listener
+    const unsubAdmins = onSnapshot(
+      collection(db, 'admins'),
+      (snap) => {
+        if (cancelled) return;
+        if (!snap.empty) {
+          const remoteMap = new Map<string, AdminAccount>();
+          snap.docs.forEach((d) => {
+            const adm = sanitizeAdminForCloud(d.data() as AdminAccount);
+            remoteMap.set(adm.id, adm);
+          });
+          if (isSyncInFlightRef.current) {
+            adminsRef.current.forEach((localRaw) => {
+              const local = sanitizeAdminForCloud(localRaw);
+              const remote = remoteMap.get(local.id);
+              if (!remote || local.updatedAt > (remote.updatedAt || '')) {
+                remoteMap.set(local.id, local);
+              }
+            });
+          }
+          const list = Array.from(remoteMap.values());
+          setAdmins(list);
+          writeStorage(LS_KEYS.ADMINS, list);
+
+          // Sync currently active staff session if modified or deactivated remotely
+          const currentActive = activeAdminRef.current;
+          if (currentActive) {
+            const matched = remoteMap.get(currentActive.id);
+            if (!matched || !matched.active) {
+              setActiveAdmin(null);
+            } else if (
+              matched.updatedAt !== currentActive.updatedAt ||
+              matched.role !== currentActive.role ||
+              matched.nama !== currentActive.nama
+            ) {
+              setActiveAdmin(matched);
+            }
+          }
+        }
+        if (!snap.metadata.fromCache || !isOffline) {
+          markSyncedNow();
+        }
+      },
+      (err) => {
+        captureFirestoreError(err, OperationType.LIST, 'admins');
+      }
+    );
+    unsubs.push(unsubAdmins);
+
+    // 2. Students real-time listener
     const unsubStudents = onSnapshot(
       collection(db, 'students'),
       (snap) => {
@@ -693,7 +689,6 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
             const st = d.data() as Student;
             remoteMap.set(st.nis || d.id, st);
           });
-          // Preserve strictly newer local items while initial batch sync is still uploading
           if (isSyncInFlightRef.current) {
             studentsRef.current.forEach((local) => {
               const remote = remoteMap.get(local.nis);
@@ -706,10 +701,8 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
           setStudents(list);
           writeStorage(LS_KEYS.STUDENTS, list);
         }
-        setCloudConnected(true);
         if (!snap.metadata.fromCache || !isOffline) {
-          setSyncStatus('synced');
-          setLastSyncedAt(new Date().toISOString());
+          markSyncedNow();
         }
       },
       (err) => {
@@ -718,7 +711,7 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     );
     unsubs.push(unsubStudents);
 
-    // 2. Attendances listener
+    // 3. Attendances real-time listener
     const unsubAttendances = onSnapshot(
       collection(db, 'attendances'),
       (snap) => {
@@ -740,7 +733,7 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setAttendances(list);
         writeStorage(LS_KEYS.ATTENDANCES, list);
         if (!snap.metadata.fromCache || !isOffline) {
-          setLastSyncedAt(new Date().toISOString());
+          markSyncedNow();
         }
       },
       (err) => {
@@ -749,40 +742,7 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     );
     unsubs.push(unsubAttendances);
 
-    // 3. Admins listener — ONLY attach for Super Admin (prevents permission-denied for Admin TU / Operator)
-    if (resolveIsSuperAdmin(firebaseUser)) {
-      const unsubAdmins = onSnapshot(
-        collection(db, 'admins'),
-        (snap) => {
-          if (cancelled) return;
-          if (!snap.empty) {
-            const remoteMap = new Map<string, AdminAccount>();
-            snap.docs.forEach((d) => {
-              const adm = sanitizeAdminForCloud(d.data() as AdminAccount);
-              remoteMap.set(adm.id, adm);
-            });
-            if (isSyncInFlightRef.current) {
-              adminsRef.current.forEach((localRaw) => {
-                const local = sanitizeAdminForCloud(localRaw);
-                const remote = remoteMap.get(local.id);
-                if (!remote || local.updatedAt > (remote.updatedAt || '')) {
-                  remoteMap.set(local.id, local);
-                }
-              });
-            }
-            const list = Array.from(remoteMap.values());
-            setAdmins(list);
-            writeStorage(LS_KEYS.ADMINS, list);
-          }
-        },
-        (err) => {
-          captureFirestoreError(err, OperationType.LIST, 'admins');
-        }
-      );
-      unsubs.push(unsubAdmins);
-    }
-
-    // 4. Admin logs listener
+    // 4. Admin logs real-time listener
     const unsubLogs = onSnapshot(
       collection(db, 'admin_logs'),
       (snap) => {
@@ -800,7 +760,7 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     );
     unsubs.push(unsubLogs);
 
-    // 5. School settings listener
+    // 5. School settings real-time listener
     const unsubSettings = onSnapshot(
       doc(db, 'school_settings', 'main'),
       (snap) => {
@@ -827,14 +787,7 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       cancelled = true;
       unsubs.forEach((u) => u());
     };
-  }, [
-    firebaseUser,
-    activeAdmin?.role,
-    isOffline,
-    captureFirestoreError,
-    resolveIsSuperAdmin,
-    syncNowToFirestore,
-  ]);
+  }, [isOffline, captureFirestoreError, markSyncedNow, syncNowToFirestore]);
 
   const addAdminLog = useCallback(
     async (action: string, detail: string, actor?: AdminAccount | null) => {
@@ -858,16 +811,16 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         return next;
       });
 
-      if (auth.currentUser?.emailVerified) {
+      if (isOnlineNow()) {
         try {
           await setDoc(doc(db, 'admin_logs', entry.id), entry);
-          setLastSyncedAt(new Date().toISOString());
+          markSyncedNow();
         } catch (err) {
           captureFirestoreError(err, OperationType.CREATE, `admin_logs/${entry.id}`);
         }
       }
     },
-    [activeAdmin, captureFirestoreError]
+    [activeAdmin, captureFirestoreError, markSyncedNow]
   );
 
   const loginWithCredentials = useCallback(
@@ -882,10 +835,10 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         (a) => a.username.toLowerCase() === cleanId || a.email.toLowerCase() === cleanId
       );
       if (!found) {
-        return { ok: false, error: 'Akun administrator tidak ditemukan.' };
+        return { ok: false, error: 'Akun petugas tidak ditemukan dalam database.' };
       }
       if (!found.active) {
-        return { ok: false, error: 'Akun ini sedang dinonaktifkan oleh Super Admin.' };
+        return { ok: false, error: 'Akun ini sedang dinonaktifkan oleh Admin Super.' };
       }
       if (found.password !== cleanPw && !(found.password === '109109' && cleanPw === '109')) {
         return { ok: false, error: 'Kata sandi atau PIN yang dimasukkan salah.' };
@@ -929,114 +882,6 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     [admins, addAdminLog]
   );
 
-  const authorizeGoogleAccount = useCallback(
-    async (user: User): Promise<{ ok: boolean; account?: AdminAccount; error?: string }> => {
-      const email = (user.email || '').toLowerCase();
-      if (!email) {
-        return { ok: false, error: 'Akun Google tidak memiliki alamat email.' };
-      }
-
-      const matchedLocal = adminsRef.current.find((a) => a.email.toLowerCase() === email);
-      const isBootstrap = BOOTSTRAPPED_SUPER_ADMINS.includes(email);
-
-      let cloudRoleDoc: { role?: AdminRole; active?: boolean; adminId?: string } | null = null;
-      if (!matchedLocal && !isBootstrap) {
-        try {
-          const snap = await getDoc(doc(db, 'admin_email_roles', toEmailRoleKey(email)));
-          if (snap.exists()) {
-            cloudRoleDoc = snap.data() as { role?: AdminRole; active?: boolean; adminId?: string };
-          }
-        } catch {
-          // If denied or missing, fall through to check below
-        }
-      }
-
-      if (!matchedLocal && !isBootstrap && !cloudRoleDoc) {
-        await signOut(auth);
-        return {
-          ok: false,
-          error: `Email ${email} belum terdaftar sebagai Admin SMAN 109 Jakarta. Hubungi Super Admin.`,
-        };
-      }
-
-      if ((matchedLocal && !matchedLocal.active) || (cloudRoleDoc && cloudRoleDoc.active === false)) {
-        await signOut(auth);
-        return {
-          ok: false,
-          error: 'Akun admin Anda saat ini dinonaktifkan.',
-        };
-      }
-
-      const resolvedRole: AdminRole = isBootstrap
-        ? 'super_admin'
-        : matchedLocal?.role || cloudRoleDoc?.role || 'operator';
-
-      const sessionAccount: AdminAccount = matchedLocal
-        ? sanitizeAdminForCloud(matchedLocal)
-        : {
-            id: cloudRoleDoc?.adminId || sanitizeId(user.uid, 'adm'),
-            nama: user.displayName || 'Admin Google SMAN 109',
-            email,
-            username: email.split('@')[0],
-            password: 'google_oauth_verified',
-            telepon: '',
-            role: resolvedRole,
-            active: true,
-            createdAt: new Date().toISOString(),
-            updatedAt: new Date().toISOString(),
-          };
-
-      return { ok: true, account: sessionAccount };
-    },
-    []
-  );
-
-  const loginWithGoogle = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
-    try {
-      const cred = await signInWithPopup(auth, googleProvider);
-      const res = await authorizeGoogleAccount(cred.user);
-      if (!res.ok || !res.account) {
-        return { ok: false, error: res.error };
-      }
-
-      setActiveAdmin(res.account);
-      setActiveDate(getTodayWib());
-      void addAdminLog('LOGIN_GOOGLE', `Masuk melalui Google Auth (${res.account.email})`, res.account);
-      return { ok: true };
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Gagal masuk dengan Google.';
-      if (msg.includes('popup-closed-by-user')) {
-        return { ok: false, error: 'Jendela login Google ditutup sebelum selesai.' };
-      }
-      return { ok: false, error: msg };
-    }
-  }, [addAdminLog, authorizeGoogleAccount]);
-
-  const connectCloudSync = useCallback(async (): Promise<{ ok: boolean; error?: string }> => {
-    try {
-      if (auth.currentUser?.emailVerified) {
-        return await syncNowToFirestore();
-      }
-      const cred = await signInWithPopup(auth, googleProvider);
-      const res = await authorizeGoogleAccount(cred.user);
-      if (!res.ok || !res.account) {
-        return { ok: false, error: res.error };
-      }
-      void addAdminLog(
-        'HUBUNGKAN_CLOUD',
-        `Menghubungkan sinkronisasi real-time Firestore via Google (${res.account.email})`,
-        activeAdminRef.current || res.account
-      );
-      return await syncNowToFirestore();
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Gagal menghubungkan akun Google Cloud.';
-      if (msg.includes('popup-closed-by-user')) {
-        return { ok: false, error: 'Popup autentikasi Google ditutup sebelum selesai.' };
-      }
-      return { ok: false, error: msg };
-    }
-  }, [addAdminLog, authorizeGoogleAccount, syncNowToFirestore]);
-
   const logout = useCallback(async () => {
     if (activeAdmin) {
       await addAdminLog('LOGOUT', `Keluar dari sesi (${activeAdmin.username})`, activeAdmin);
@@ -1044,13 +889,6 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setActiveAdmin(null);
     setActiveDate(getTodayWib());
     setSyncError(null);
-    try {
-      if (auth.currentUser) {
-        await signOut(auth);
-      }
-    } catch {
-      // Ignore signout error
-    }
   }, [activeAdmin, addAdminLog]);
 
   const saveStudent = useCallback(
@@ -1066,17 +904,16 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         return next;
       });
 
-      if (auth.currentUser?.emailVerified) {
+      if (isOnlineNow()) {
         try {
           await setDoc(doc(db, 'students', clean.nis), clean, { merge: true });
-          setSyncStatus('synced');
-          setLastSyncedAt(new Date().toISOString());
+          markSyncedNow();
         } catch (err) {
           captureFirestoreError(err, OperationType.WRITE, `students/${clean.nis}`);
         }
       }
     },
-    [captureFirestoreError]
+    [captureFirestoreError, markSyncedNow]
   );
 
   const bulkSaveStudents = useCallback(
@@ -1093,7 +930,7 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         return next;
       });
 
-      if (auth.currentUser?.emailVerified) {
+      if (isOnlineNow()) {
         try {
           for (let i = 0; i < cleaned.length; i += 400) {
             const batch = writeBatch(db);
@@ -1102,14 +939,13 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
             });
             await batch.commit();
           }
-          setSyncStatus('synced');
-          setLastSyncedAt(new Date().toISOString());
+          markSyncedNow();
         } catch (err) {
           captureFirestoreError(err, OperationType.WRITE, 'students');
         }
       }
     },
-    [captureFirestoreError]
+    [captureFirestoreError, markSyncedNow]
   );
 
   const deleteStudent = useCallback(
@@ -1121,17 +957,16 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         return next;
       });
 
-      if (auth.currentUser?.emailVerified) {
+      if (isOnlineNow()) {
         try {
           await deleteDoc(doc(db, 'students', cleanNis));
-          setSyncStatus('synced');
-          setLastSyncedAt(new Date().toISOString());
+          markSyncedNow();
         } catch (err) {
           captureFirestoreError(err, OperationType.DELETE, `students/${cleanNis}`);
         }
       }
     },
-    [captureFirestoreError]
+    [captureFirestoreError, markSyncedNow]
   );
 
   const recordAttendance = useCallback(
@@ -1147,17 +982,16 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         return next;
       });
 
-      if (auth.currentUser?.emailVerified) {
+      if (isOnlineNow()) {
         try {
           await setDoc(doc(db, 'attendances', clean.id), clean, { merge: true });
-          setSyncStatus('synced');
-          setLastSyncedAt(new Date().toISOString());
+          markSyncedNow();
         } catch (err) {
           captureFirestoreError(err, OperationType.WRITE, `attendances/${clean.id}`);
         }
       }
     },
-    [captureFirestoreError]
+    [captureFirestoreError, markSyncedNow]
   );
 
   const bulkRecordAttendance = useCallback(
@@ -1174,7 +1008,7 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         return next;
       });
 
-      if (auth.currentUser?.emailVerified) {
+      if (isOnlineNow()) {
         try {
           for (let i = 0; i < cleaned.length; i += 400) {
             const batch = writeBatch(db);
@@ -1183,14 +1017,13 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
             });
             await batch.commit();
           }
-          setSyncStatus('synced');
-          setLastSyncedAt(new Date().toISOString());
+          markSyncedNow();
         } catch (err) {
           captureFirestoreError(err, OperationType.WRITE, 'attendances');
         }
       }
     },
-    [captureFirestoreError]
+    [captureFirestoreError, markSyncedNow]
   );
 
   const clearDateAttendances = useCallback(
@@ -1202,7 +1035,7 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         return next;
       });
 
-      if (auth.currentUser?.emailVerified && toDelete.length > 0) {
+      if (isOnlineNow() && toDelete.length > 0) {
         try {
           for (let i = 0; i < toDelete.length; i += 400) {
             const batch = writeBatch(db);
@@ -1211,14 +1044,13 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
             });
             await batch.commit();
           }
-          setSyncStatus('synced');
-          setLastSyncedAt(new Date().toISOString());
+          markSyncedNow();
         } catch (err) {
           captureFirestoreError(err, OperationType.DELETE, 'attendances');
         }
       }
     },
-    [attendances, captureFirestoreError]
+    [attendances, captureFirestoreError, markSyncedNow]
   );
 
   const clearAllAttendances = useCallback(async () => {
@@ -1226,7 +1058,7 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setAttendances([]);
     writeStorage(LS_KEYS.ATTENDANCES, []);
 
-    if (auth.currentUser?.emailVerified && toDelete.length > 0) {
+    if (isOnlineNow() && toDelete.length > 0) {
       try {
         for (let i = 0; i < toDelete.length; i += 400) {
           const batch = writeBatch(db);
@@ -1235,13 +1067,12 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
           });
           await batch.commit();
         }
-        setSyncStatus('synced');
-        setLastSyncedAt(new Date().toISOString());
+        markSyncedNow();
       } catch (err) {
         captureFirestoreError(err, OperationType.DELETE, 'attendances');
       }
     }
-  }, [attendances, captureFirestoreError]);
+  }, [attendances, captureFirestoreError, markSyncedNow]);
 
   const saveAdmin = useCallback(
     async (admin: AdminAccount) => {
@@ -1249,7 +1080,6 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         ...admin,
         updatedAt: new Date().toISOString(),
       });
-      const prevAdmin = adminsRef.current.find((a) => a.id === clean.id);
 
       setAdmins((prev) => {
         const idx = prev.findIndex((a) => a.id === clean.id);
@@ -1261,59 +1091,36 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setActiveAdmin(clean);
       }
 
-      if (auth.currentUser?.emailVerified) {
+      if (isOnlineNow()) {
         try {
-          const batch = writeBatch(db);
-          batch.set(doc(db, 'admins', clean.id), clean, { merge: true });
-          const roleDoc = buildEmailRoleDoc(clean);
-          if (roleDoc.id) {
-            batch.set(doc(db, 'admin_email_roles', roleDoc.id), roleDoc, { merge: true });
-          }
-          if (prevAdmin && prevAdmin.email.toLowerCase() !== clean.email.toLowerCase()) {
-            const oldKey = toEmailRoleKey(prevAdmin.email);
-            if (oldKey && oldKey !== roleDoc.id) {
-              batch.delete(doc(db, 'admin_email_roles', oldKey));
-            }
-          }
-          await batch.commit();
-          setSyncStatus('synced');
-          setLastSyncedAt(new Date().toISOString());
+          await setDoc(doc(db, 'admins', clean.id), clean, { merge: true });
+          markSyncedNow();
         } catch (err) {
           captureFirestoreError(err, OperationType.WRITE, `admins/${clean.id}`);
         }
       }
     },
-    [activeAdmin, captureFirestoreError]
+    [activeAdmin, captureFirestoreError, markSyncedNow]
   );
 
   const deleteAdmin = useCallback(
     async (adminId: string) => {
-      const target = adminsRef.current.find((a) => a.id === adminId);
       setAdmins((prev) => {
         const next = prev.filter((a) => a.id !== adminId);
         writeStorage(LS_KEYS.ADMINS, next);
         return next;
       });
 
-      if (auth.currentUser?.emailVerified) {
+      if (isOnlineNow()) {
         try {
-          const batch = writeBatch(db);
-          batch.delete(doc(db, 'admins', sanitizeId(adminId, 'adm')));
-          if (target?.email) {
-            const emailKey = toEmailRoleKey(target.email);
-            if (emailKey) {
-              batch.delete(doc(db, 'admin_email_roles', emailKey));
-            }
-          }
-          await batch.commit();
-          setSyncStatus('synced');
-          setLastSyncedAt(new Date().toISOString());
+          await deleteDoc(doc(db, 'admins', sanitizeId(adminId, 'adm')));
+          markSyncedNow();
         } catch (err) {
           captureFirestoreError(err, OperationType.DELETE, `admins/${adminId}`);
         }
       }
     },
-    [captureFirestoreError]
+    [captureFirestoreError, markSyncedNow]
   );
 
   const saveSettings = useCallback(
@@ -1325,17 +1132,16 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       setSettings(clean);
       writeStorage(LS_KEYS.SETTINGS, clean);
 
-      if (auth.currentUser?.emailVerified) {
+      if (isOnlineNow()) {
         try {
           await setDoc(doc(db, 'school_settings', 'main'), clean, { merge: true });
-          setSyncStatus('synced');
-          setLastSyncedAt(new Date().toISOString());
+          markSyncedNow();
         } catch (err) {
           captureFirestoreError(err, OperationType.WRITE, 'school_settings/main');
         }
       }
     },
-    [captureFirestoreError]
+    [captureFirestoreError, markSyncedNow]
   );
 
   const restoreBackup = useCallback(
@@ -1366,7 +1172,6 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         adminLogs,
         settings,
         activeAdmin,
-        firebaseUser,
         cloudConnected,
         isOffline,
         syncStatus,
@@ -1376,8 +1181,6 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         setActiveDate,
         loginWithCredentials,
         loginWithSelectedAdmin,
-        loginWithGoogle,
-        connectCloudSync,
         syncNowToFirestore,
         clearSyncError,
         logout,
