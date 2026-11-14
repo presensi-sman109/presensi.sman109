@@ -23,7 +23,7 @@ import {
   statusCodeShort,
 } from '../lib/utils';
 import type { AttendanceRecord, AttendanceStatus, Student } from '../types';
-import { SchoolLogo, SchoolStampSvg } from './SchoolLogo';
+import { SchoolLogo } from './SchoolLogo';
 
 type ReportSubMode = 'range' | 'monthly_matrix' | 'monthly_summary' | 'individual';
 
@@ -844,10 +844,9 @@ export const ReportTab: React.FC = () => {
 
               {/* Official Signatures */}
               <div className="mt-6 grid grid-cols-2 gap-8 text-xs text-slate-800">
-                <div className="relative">
+                <div>
                   <div>Mengetahui,</div>
                   <div className="font-bold">Kepala {settings.schoolName}</div>
-                  <SchoolStampSvg className="w-16 h-16 absolute left-20 top-4 opacity-55 pointer-events-none" />
                   <div className="h-14" />
                   <div className="font-bold underline">{settings.principalName}</div>
                   <div className="font-mono text-[11px]">NIP. {settings.principalNip}</div>
@@ -954,10 +953,9 @@ export const ReportTab: React.FC = () => {
               </table>
 
               <div className="mt-8 grid grid-cols-2 gap-8 text-xs text-slate-800">
-                <div className="relative">
+                <div>
                   <div>Mengetahui,</div>
                   <div className="font-bold">Kepala Sekolah</div>
-                  <SchoolStampSvg className="w-16 h-16 absolute left-16 top-4 opacity-55 pointer-events-none" />
                   <div className="h-14" />
                   <div className="font-bold underline">{settings.principalName}</div>
                   <div className="font-mono text-[11px]">NIP. {settings.principalNip}</div>
@@ -1147,10 +1145,9 @@ export const ReportTab: React.FC = () => {
                   {/* EXACT 3-COLUMN SIGNATURE POSITIONS AS REQUESTED */}
                   <div className="mt-6 grid grid-cols-3 gap-4 text-[11px] text-slate-900 pt-2">
                     {/* Paling Kiri: Mengetahui, Kepala Sekolah */}
-                    <div className="relative text-left">
+                    <div className="text-left">
                       <div>Mengetahui,</div>
                       <div className="font-bold">Kepala Sekolah</div>
-                      <SchoolStampSvg className="w-14 h-14 absolute left-14 top-3 opacity-60 pointer-events-none" />
                       <div className="h-12" />
                       <div className="font-bold underline">{settings.principalName}</div>
                       <div className="font-mono text-[10px]">NIP. {settings.principalNip}</div>

@@ -2,7 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import JsBarcode from 'jsbarcode';
 import QRCode from 'qrcode';
 import type { SchoolSettings, Student } from '../types';
-import { SchoolLogo, SchoolStampSvg, StudentAvatar } from './SchoolLogo';
+import { SchoolLogo, StudentAvatar } from './SchoolLogo';
 
 export type CodeMode = 'QR' | 'BARCODE' | 'BOTH';
 
@@ -165,8 +165,7 @@ export const CardBackFace: React.FC<CardBackProps> = ({ settings }) => {
           <div className="text-[6px] text-slate-500 max-w-[92px] leading-tight">
             {settings.cardBackFooter}
           </div>
-          <div className="text-right relative pr-1">
-            <SchoolStampSvg className="w-9 h-9 opacity-60 absolute -top-3 right-3 pointer-events-none" />
+          <div className="text-right pr-1">
             <div className="text-[6px] text-slate-500">Kepala Sekolah,</div>
             <div className="h-4" />
             <div className="text-[6.5px] font-bold text-slate-900 underline">
