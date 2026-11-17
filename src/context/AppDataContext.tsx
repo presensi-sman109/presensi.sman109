@@ -239,7 +239,9 @@ interface AppDataContextValue {
   logout: () => Promise<void>;
   saveStudent: (student: Student) => Promise<void>;
   bulkSaveStudents: (list: Student[]) => Promise<void>;
+  replaceAllStudents: (list: Student[]) => Promise<void>;
   deleteStudent: (nis: string) => Promise<void>;
+  bulkDeleteStudents: (nisList: string[]) => Promise<void>;
   recordAttendance: (record: AttendanceRecord) => Promise<void>;
   bulkRecordAttendance: (records: AttendanceRecord[]) => Promise<void>;
   clearDateAttendances: (date: string) => Promise<void>;
@@ -260,7 +262,7 @@ const AppDataContext = createContext<AppDataContextValue | null>(null);
 export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [students, setStudents] = useState<Student[]>(() => {
     const existing = readStorage<Student[] | null>(LS_KEYS.STUDENTS, null);
-    if (existing && existing.length > 0) return existing;
+    if (existing !== null) return existing;
     writeStorage(LS_KEYS.STUDENTS, INITIAL_STUDENTS);
     return INITIAL_STUDENTS;
   });
@@ -457,7 +459,7 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       }
 
       const mergedStudentMap = new Map<string, Student>(remoteStudentMap);
-      const isStudentsBootEmpty = remoteStudentMap.size === 0;
+      const isStudentsBootEmpty = remoteStudentMap.size === 0 && !prevSyncTs;
       studentsRef.current.forEach((localRaw) => {
         const local = sanitizeStudentForCloud(localRaw);
         const remote = remoteStudentMap.get(local.nis);
@@ -476,7 +478,7 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       });
 
       const mergedStudents = Array.from(mergedStudentMap.values());
-      if (mergedStudents.length > 0) {
+      if (mergedStudents.length > 0 || prevSyncTs) {
         setStudents(mergedStudents);
         writeStorage(LS_KEYS.STUDENTS, mergedStudents);
       }
@@ -683,20 +685,20 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
       collection(db, 'students'),
       (snap) => {
         if (cancelled) return;
-        if (!snap.empty) {
-          const remoteMap = new Map<string, Student>();
-          snap.docs.forEach((d) => {
-            const st = d.data() as Student;
-            remoteMap.set(st.nis || d.id, st);
+        const remoteMap = new Map<string, Student>();
+        snap.docs.forEach((d) => {
+          const st = d.data() as Student;
+          remoteMap.set(st.nis || d.id, st);
+        });
+        if (isSyncInFlightRef.current) {
+          studentsRef.current.forEach((local) => {
+            const remote = remoteMap.get(local.nis);
+            if (!remote || local.updatedAt > (remote.updatedAt || '')) {
+              remoteMap.set(local.nis, local);
+            }
           });
-          if (isSyncInFlightRef.current) {
-            studentsRef.current.forEach((local) => {
-              const remote = remoteMap.get(local.nis);
-              if (!remote || local.updatedAt > (remote.updatedAt || '')) {
-                remoteMap.set(local.nis, local);
-              }
-            });
-          }
+        }
+        if (!snap.empty || Boolean(lastSyncedAtRef.current)) {
           const list = Array.from(remoteMap.values());
           setStudents(list);
           writeStorage(LS_KEYS.STUDENTS, list);
@@ -948,6 +950,65 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
     [captureFirestoreError, markSyncedNow]
   );
 
+  const replaceAllStudents = useCallback(
+    async (list: Student[]) => {
+      const nowIso = new Date().toISOString();
+      const dedupMap = new Map<string, Student>();
+      list.forEach((s) => {
+        const clean = sanitizeStudentForCloud({ ...s, updatedAt: nowIso });
+        if (!dedupMap.has(clean.nis)) {
+          dedupMap.set(clean.nis, clean);
+        }
+      });
+      const cleaned = Array.from(dedupMap.values());
+      const keepIds = new Set(cleaned.map((s) => s.nis));
+
+      const localIdsToDelete = studentsRef.current
+        .map((s) => sanitizeStudentId(s.nis))
+        .filter((id) => !keepIds.has(id));
+
+      setStudents(cleaned);
+      writeStorage(LS_KEYS.STUDENTS, cleaned);
+
+      if (isOnlineNow()) {
+        try {
+          const deleteIds = new Set<string>(localIdsToDelete);
+          try {
+            const remoteSnap = await getDocs(collection(db, 'students'));
+            remoteSnap.docs.forEach((d) => {
+              if (!keepIds.has(d.id)) {
+                deleteIds.add(d.id);
+              }
+            });
+          } catch {
+            // Fall back to local known IDs if remote list temporarily fails
+          }
+
+          const ops: Array<{ type: 'set'; student: Student } | { type: 'del'; id: string }> = [
+            ...Array.from(deleteIds).map((id) => ({ type: 'del' as const, id })),
+            ...cleaned.map((student) => ({ type: 'set' as const, student })),
+          ];
+
+          for (let i = 0; i < ops.length; i += 400) {
+            const batch = writeBatch(db);
+            ops.slice(i, i + 400).forEach((op) => {
+              if (op.type === 'del') {
+                batch.delete(doc(db, 'students', op.id));
+              } else {
+                batch.set(doc(db, 'students', op.student.nis), op.student);
+              }
+            });
+            await batch.commit();
+          }
+          markSyncedNow();
+        } catch (err) {
+          captureFirestoreError(err, OperationType.WRITE, 'students');
+        }
+      }
+    },
+    [captureFirestoreError, markSyncedNow]
+  );
+
   const deleteStudent = useCallback(
     async (nis: string) => {
       const cleanNis = sanitizeStudentId(nis);
@@ -963,6 +1024,39 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
           markSyncedNow();
         } catch (err) {
           captureFirestoreError(err, OperationType.DELETE, `students/${cleanNis}`);
+        }
+      }
+    },
+    [captureFirestoreError, markSyncedNow]
+  );
+
+  const bulkDeleteStudents = useCallback(
+    async (nisList: string[]) => {
+      if (nisList.length === 0) return;
+      const rawSet = new Set(nisList);
+      const cleanSet = new Set(nisList.map((n) => sanitizeStudentId(n)));
+
+      setStudents((prev) => {
+        const next = prev.filter(
+          (s) => !rawSet.has(s.nis) && !cleanSet.has(sanitizeStudentId(s.nis))
+        );
+        writeStorage(LS_KEYS.STUDENTS, next);
+        return next;
+      });
+
+      if (isOnlineNow()) {
+        try {
+          const ids = Array.from(cleanSet);
+          for (let i = 0; i < ids.length; i += 400) {
+            const batch = writeBatch(db);
+            ids.slice(i, i + 400).forEach((id) => {
+              batch.delete(doc(db, 'students', id));
+            });
+            await batch.commit();
+          }
+          markSyncedNow();
+        } catch (err) {
+          captureFirestoreError(err, OperationType.DELETE, 'students');
         }
       }
     },
@@ -1186,7 +1280,9 @@ export const AppDataProvider: React.FC<{ children: React.ReactNode }> = ({ child
         logout,
         saveStudent,
         bulkSaveStudents,
+        replaceAllStudents,
         deleteStudent,
+        bulkDeleteStudents,
         recordAttendance,
         bulkRecordAttendance,
         clearDateAttendances,
