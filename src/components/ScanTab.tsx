@@ -13,6 +13,7 @@ import {
   Users,
   VideoOff,
   XCircle,
+  Zap,
 } from 'lucide-react';
 import { useAppData } from '../context/AppDataContext';
 import {
@@ -44,6 +45,7 @@ export const ScanTab: React.FC = () => {
   const [cameraActive, setCameraActive] = useState(false);
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [manualInput, setManualInput] = useState('');
+  const [autoBarcodeEnabled, setAutoBarcodeEnabled] = useState(true);
   const [feedback, setFeedback] = useState<ScanFeedback | null>(null);
   const [bulkModalOpen, setBulkModalOpen] = useState(false);
 
@@ -51,6 +53,12 @@ export const ScanTab: React.FC = () => {
   const lastScanRef = useRef<{ code: string; ts: number }>({ code: '', ts: 0 });
   const manualInputRef = useRef<HTMLInputElement | null>(null);
   const cameraGenRef = useRef(0);
+  const autoSubmitTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const inputBurstRef = useRef<{ lastTs: number; fastCount: number; pasted: boolean }>({
+    lastTs: 0,
+    fastCount: 0,
+    pasted: false,
+  });
 
   const isSuperAdmin = activeAdmin?.role === 'super_admin';
   const todayWib = getTodayWib();
@@ -289,12 +297,174 @@ export const ScanTab: React.FC = () => {
     };
   }, [startCamera, safeStopScanner]);
 
+  const clearAutoSubmitTimer = useCallback(() => {
+    if (autoSubmitTimerRef.current) {
+      clearTimeout(autoSubmitTimerRef.current);
+      autoSubmitTimerRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      clearAutoSubmitTimer();
+    };
+  }, [clearAutoSubmitTimer]);
+
+  const submitScannedCode = useCallback(
+    (rawValue: string, keepFocus = true) => {
+      clearAutoSubmitTimer();
+      inputBurstRef.current = { lastTs: 0, fastCount: 0, pasted: false };
+      const code = rawValue.trim();
+      if (!code) return;
+      void processScanCodeRef.current(code);
+      setManualInput('');
+      if (keepFocus) {
+        manualInputRef.current?.focus();
+      }
+    },
+    [clearAutoSubmitTimer]
+  );
+
+  // Global HID USB/Bluetooth barcode scanner listener (works even when NIS input is not focused)
+  useEffect(() => {
+    if (!autoBarcodeEnabled || bulkModalOpen) return;
+
+    let buffer = '';
+    let lastKeyTs = 0;
+    let rapidCount = 0;
+    let idleTimer: ReturnType<typeof setTimeout> | null = null;
+
+    const resetBuffer = () => {
+      buffer = '';
+      lastKeyTs = 0;
+      rapidCount = 0;
+      if (idleTimer) {
+        clearTimeout(idleTimer);
+        idleTimer = null;
+      }
+    };
+
+    const flushBuffer = () => {
+      const code = buffer.trim();
+      const validBurst = code.length >= 3 && rapidCount >= 2;
+      resetBuffer();
+      if (validBurst) {
+        void processScanCodeRef.current(code);
+      }
+    };
+
+    const handleWindowKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      const target = e.target as HTMLElement | null;
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.tagName === 'SELECT' ||
+          target.isContentEditable)
+      ) {
+        return;
+      }
+
+      if (e.key === 'Enter' || e.key === 'Tab') {
+        if (buffer.trim().length >= 3 && rapidCount >= 1) {
+          e.preventDefault();
+          const code = buffer.trim();
+          resetBuffer();
+          void processScanCodeRef.current(code);
+        } else {
+          resetBuffer();
+        }
+        return;
+      }
+
+      if (e.key.length !== 1) return;
+
+      const now = Date.now();
+      const delta = now - lastKeyTs;
+      if (lastKeyTs > 0 && delta > 90) {
+        buffer = e.key;
+        rapidCount = 0;
+      } else {
+        if (buffer.length > 0 && delta <= 90) {
+          rapidCount += 1;
+        }
+        buffer += e.key;
+      }
+      lastKeyTs = now;
+
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(flushBuffer, 180);
+    };
+
+    window.addEventListener('keydown', handleWindowKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleWindowKeyDown);
+      if (idleTimer) clearTimeout(idleTimer);
+    };
+  }, [autoBarcodeEnabled, bulkModalOpen]);
+
+  const handleManualInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const nextValue = e.target.value;
+    setManualInput(nextValue);
+    clearAutoSubmitTimer();
+
+    if (!autoBarcodeEnabled) return;
+
+    // Immediate submit if scanner/paste includes newline
+    if (nextValue.includes('\n') || nextValue.includes('\r')) {
+      submitScannedCode(nextValue);
+      return;
+    }
+
+    const now = Date.now();
+    const delta = now - inputBurstRef.current.lastTs;
+    if (nextValue.length <= 1 || (inputBurstRef.current.lastTs > 0 && delta > 120)) {
+      if (!inputBurstRef.current.pasted) {
+        inputBurstRef.current.fastCount = 0;
+      }
+    } else if (inputBurstRef.current.lastTs > 0 && delta <= 120) {
+      inputBurstRef.current.fastCount += 1;
+    }
+    inputBurstRef.current.lastTs = now;
+
+    const trimmed = nextValue.trim();
+    if (!trimmed) {
+      inputBurstRef.current.pasted = false;
+      return;
+    }
+
+    const isScannerBurst =
+      inputBurstRef.current.pasted ||
+      (trimmed.length >= 3 && inputBurstRef.current.fastCount >= 2);
+    const isExactStudentMatch = students.some(
+      (s) =>
+        s.nis.toLowerCase() === trimmed.toLowerCase() ||
+        s.id.toLowerCase() === trimmed.toLowerCase()
+    );
+
+    if (isScannerBurst) {
+      autoSubmitTimerRef.current = setTimeout(() => {
+        submitScannedCode(nextValue);
+      }, 160);
+    } else if (isExactStudentMatch) {
+      autoSubmitTimerRef.current = setTimeout(() => {
+        submitScannedCode(nextValue);
+      }, 320);
+    }
+  };
+
+  const handleManualInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter' || (e.key === 'Tab' && autoBarcodeEnabled && manualInput.trim().length > 0)) {
+      e.preventDefault();
+      submitScannedCode(manualInput);
+    }
+  };
+
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!manualInput.trim()) return;
-    void processScanCode(manualInput);
-    setManualInput('');
-    manualInputRef.current?.focus();
+    submitScannedCode(manualInput);
   };
 
   const todayLogs = useMemo(
@@ -492,21 +662,49 @@ export const ScanTab: React.FC = () => {
 
           {/* Manual / USB Barcode Gun Input */}
           <form onSubmit={handleManualSubmit} className="pt-4 border-t border-slate-200 space-y-2">
-            <label
-              htmlFor="manual-nis-input"
-              className="flex items-center gap-1.5 text-xs font-semibold text-slate-700"
-            >
-              <Keyboard className="w-3.5 h-3.5 text-slate-500" />
-              Pemindai Barcode Gun USB / Input Manual NIS Siswa
-            </label>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <label
+                htmlFor="manual-nis-input"
+                className="flex items-center gap-1.5 text-xs font-semibold text-slate-700"
+              >
+                <Keyboard className="w-3.5 h-3.5 text-slate-500" />
+                Pemindai Barcode Gun USB / Input Manual NIS Siswa
+              </label>
+              <button
+                type="button"
+                onClick={() => {
+                  clearAutoSubmitTimer();
+                  setAutoBarcodeEnabled((prev) => !prev);
+                }}
+                aria-pressed={autoBarcodeEnabled}
+                className={`px-2.5 py-1 text-[11px] font-semibold rounded-lg border inline-flex items-center gap-1.5 transition-colors ${
+                  autoBarcodeEnabled
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-800 hover:bg-emerald-100'
+                    : 'bg-slate-100 border-slate-300 text-slate-700 hover:bg-slate-200'
+                }`}
+              >
+                <Zap className="w-3 h-3" />
+                {autoBarcodeEnabled
+                  ? 'Catat Otomatis Barcode: Aktif'
+                  : 'Catat Otomatis Barcode: Manual'}
+              </button>
+            </div>
             <div className="flex gap-2">
               <input
                 ref={manualInputRef}
                 id="manual-nis-input"
                 type="text"
                 value={manualInput}
-                onChange={(e) => setManualInput(e.target.value)}
-                placeholder="Arahkan kursor ke sini untuk Barcode Gun atau ketik NIS (mis. 1092501001)..."
+                onChange={handleManualInputChange}
+                onKeyDown={handleManualInputKeyDown}
+                onPaste={() => {
+                  inputBurstRef.current.pasted = true;
+                }}
+                placeholder={
+                  autoBarcodeEnabled
+                    ? 'Pindai dengan Barcode Gun (otomatis tercatat) atau ketik NIS siswa...'
+                    : 'Arahkan kursor ke sini untuk Barcode Gun atau ketik NIS (mis. 1092501001)...'
+                }
                 className="flex-1 px-3.5 py-2.5 text-sm font-mono border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-blue-600"
               />
               <button
@@ -516,6 +714,11 @@ export const ScanTab: React.FC = () => {
                 Catat Presensi
               </button>
             </div>
+            <p className="text-[11px] text-slate-500">
+              {autoBarcodeEnabled
+                ? 'Mode otomatis aktif: hasil pemindaian barcode gun langsung mencatat kehadiran tanpa perlu menekan tombol Catat Presensi.'
+                : 'Mode manual aktif: pindai atau ketik NIS lalu tekan Enter atau klik tombol Catat Presensi.'}
+            </p>
           </form>
         </div>
 
